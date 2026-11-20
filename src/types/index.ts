@@ -73,6 +73,10 @@ export interface VideoPlayerSettings {
    *           media notification that taps back into the app.
    */
   background_mode?: 'pip' | 'audio';
+  /** Phones only (SN-283): leaving the app floats the video in
+   *  picture-in-picture. Off goes straight to what Background play says
+   *  (the audio, or a pause). Default true. Typed in Rust. */
+  pip_on_leave?: boolean;
   /** Phones only: on its side the stream fills a long screen by trimming its
    *  top and bottom (never its sides, at most 1.5x). Set by a pinch on the
    *  video or the Player switch. Default false. Typed in Rust. */

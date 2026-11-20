@@ -236,6 +236,12 @@ pub struct VideoPlayerSettings {
     /// nothing to render, so it survives.
     #[serde(default = "default_background_mode")]
     pub background_mode: String,
+    /// Phones only (SN-283). Leaving the app while a stream plays floats the
+    /// video in picture-in-picture. Off skips the window: with Background play
+    /// on the stream goes straight to its audio behind the media notification,
+    /// with it off it pauses. On by default.
+    #[serde(default = "default_true")]
+    pub pip_on_leave: bool,
     /// Phones only. On its side the stream fills a long screen by trimming its
     /// top and bottom (never its sides, at most 1.5x). A pinch on the video or
     /// the Player settings switch sets it. The desktop player ignores it.
@@ -289,6 +295,7 @@ impl Default for VideoPlayerSettings {
             ad_bypass_enabled: true,
             ad_bypass_proxies: String::new(),
             background_mode: first_run_background_mode(),
+            pip_on_leave: true,
             scroll_volume: true,
             scroll_about_reveal: true,
             click_to_pause: false,
@@ -2948,6 +2955,23 @@ mod backup_persistence_tests {
     fn a_fresh_install_keeps_audio_and_old_files_keep_pip() {
         assert_eq!(Settings::default().video_player.background_mode, "audio");
         assert_eq!(default_background_mode(), "pip");
+    }
+
+    /// SN-283: the picture-in-picture switch is on for a fresh install and for
+    /// a file that predates it, and an off survives a save.
+    #[test]
+    fn pip_on_leave_defaults_on_and_round_trips() {
+        assert!(Settings::default().video_player.pip_on_leave);
+        let mut v = serde_json::to_value(VideoPlayerSettings::default()).expect("serialize");
+        v.as_object_mut().unwrap().remove("pip_on_leave");
+        let old: VideoPlayerSettings = serde_json::from_value(v).expect("parse");
+        assert!(old.pip_on_leave);
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value["video_player"]["pip_on_leave"] = serde_json::Value::Bool(false);
+        let parsed: Settings = serde_json::from_value(value).expect("parse");
+        assert!(!parsed.video_player.pip_on_leave);
+        let saved = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(saved["video_player"]["pip_on_leave"], serde_json::Value::Bool(false));
     }
 
     #[test]

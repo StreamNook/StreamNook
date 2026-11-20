@@ -270,6 +270,7 @@ export const WatchScreen: React.FC = () => {
   const showMentionCard = !!mentionCard && mentionCard.room === activeChatRoom;
   // The viewer picked the audio-only rendition: there is no picture to float.
   const audioOnly = useAppStore((s) => s.activeQuality === 'audio_only');
+  const pipOnLeave = useAppStore((s) => s.settings.video_player?.pip_on_leave) !== false;
   // The landscape chat overlay shares its knobs with the desktop overlay:
   // opacity, width and side are one preference however big the screen is.
   const fsChat = useAppStore((s) => s.settings.fullscreen_chat);
@@ -932,12 +933,14 @@ export const WatchScreen: React.FC = () => {
     // stream drops to its audio rendition behind the media notification; off,
     // it pauses (lockScreenAudio). The audio-only rendition has no picture,
     // so it never floats.
-    setPipEligible(playingHere && !audioOnly);
+    // The Picture-in-picture switch off (SN-283) skips the window: leaving
+    // goes straight to the audio, or a pause, as Background play says.
+    setPipEligible(playingHere && !audioOnly && pipOnLeave);
     return () => {
       setPreferredRefreshRate(0);
       setPipEligible(false);
     };
-  }, [playingHere, audioOnly]);
+  }, [playingHere, audioOnly, pipOnLeave]);
 
   // Landscape is a viewing posture, never a browsing one: while the full watch
   // layer is up on a screen wider than it is tall, the status bar and the

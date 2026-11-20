@@ -564,12 +564,36 @@ const PlayerSettings = () => {
             picture-in-picture window to choose against. */}
         {IS_MOBILE && (
           <SettingsRow
+            title="Picture-in-picture"
+            onReset={resetFor(['video_player.pip_on_leave', true])}
+            description="Leaving the app while a stream plays floats the video in a small window."
+            help="Off, the stream goes straight to Background play, or pauses when that is off."
+            control={
+              <Toggle
+                enabled={videoPlayer?.pip_on_leave !== false}
+                onChange={() =>
+                  updateSettings({
+                    ...settings,
+                    video_player: { ...videoPlayer, pip_on_leave: videoPlayer?.pip_on_leave === false },
+                  })
+                }
+              />
+            }
+          />
+        )}
+
+        {IS_MOBILE && (
+          <SettingsRow
             title="Background play"
             onReset={resetFor(['video_player.background_mode', 'audio'])}
             description={
-              (videoPlayer?.background_mode ?? 'pip') === 'audio'
-                ? 'Leaving the app floats the video in picture-in-picture. Close the window or lock the phone and the audio keeps going behind a media notification.'
-                : 'Leaving the app floats the video in picture-in-picture. Closing the window ends the stream; locking the phone pauses it.'
+              videoPlayer?.pip_on_leave === false
+                ? (videoPlayer?.background_mode ?? 'pip') === 'audio'
+                  ? 'Leave the app or lock the phone and the audio keeps going behind a media notification.'
+                  : 'Leaving the app or locking the phone pauses the stream.'
+                : (videoPlayer?.background_mode ?? 'pip') === 'audio'
+                  ? 'Leaving the app floats the video in picture-in-picture. Close the window or lock the phone and the audio keeps going behind a media notification.'
+                  : 'Leaving the app floats the video in picture-in-picture. Closing the window ends the stream; locking the phone pauses it.'
             }
             control={
               <Toggle

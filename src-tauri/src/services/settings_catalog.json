@@ -128,6 +128,25 @@
   {
    "page": "player",
    "section": "Playback",
+   "title": "Picture-in-picture",
+   "paths": [
+    "video_player.pip_on_leave"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Leaving the app while a stream plays floats the video in a small window. Off, the stream goes straight to Background play, or pauses when that is off.",
+   "aliases": [
+    "pip",
+    "floating window",
+    "mini player",
+    "audio only",
+    "background audio"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "player",
+   "section": "Playback",
    "title": "Background play",
    "paths": [
     "video_player.background_mode"

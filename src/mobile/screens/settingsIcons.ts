@@ -193,6 +193,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   'Middle-click mute': MousePointerClick,
   'Middle-click opens MultiNook': LayoutGrid,
   Autoplay: Play,
+  'Picture-in-picture': PictureInPicture2,
   'Background play': Headphones,
   'Zoom to fill': Expand,
   'Brightness and volume swipes': SunDim,
