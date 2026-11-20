@@ -6,7 +6,7 @@ import Plyr from 'plyr';
 // Plyr's CSS ships once, layered, via globals.css (@import ... layer(vendor));
 // a second unlayered copy here would beat the app's control-bar overrides.
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Share2, Check, VolumeX } from 'lucide-react';
+import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Share2, Check, VolumeX, SkipForward } from 'lucide-react';
 import { Heart, HeartBreak, ArrowLeft, CaretRight, X as XIcon } from 'phosphor-react';
 import { mainChatRoom, useAppStore, type AutoReloadReason } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
@@ -26,7 +26,7 @@ import StreamTitleWithEmojis from './StreamTitleWithEmojis';
 import PlayerStatsOverlay from './PlayerStatsOverlay';
 import OfflineRoomScreen, { OfflineRoomLivePill } from './OfflineRoomScreen';
 import { useVodProgressReporter } from '../hooks/useVodProgressReporter';
-import { useMutedSegmentNotice } from '../hooks/useMutedSegmentNotice';
+import { skipMutedTarget, useMutedSegmentNotice } from '../hooks/useMutedSegmentNotice';
 import { formatVodTime } from '../utils/vodProgress';
 import { createLiveEdgeTracker } from '../utils/liveEdge';
 import { isCodecFailure } from '../utils/codecFailure';
@@ -3871,14 +3871,27 @@ const VideoPlayer = () => {
 
       {/* Why the audio went silent, for as long as it is silent. Static text
           per range: a ticking countdown would re-render the player every
-          second for three minutes. */}
+          second for three minutes. Skip jumps to where the sound comes back
+          (SN-282). */}
       {activeMute && (
-        <div
-          role="status"
-          className="glass-badge pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium text-white"
-        >
-          <VolumeX size={12} />
-          Audio muted by Twitch · {formatVodTime(activeMute.end_secs - activeMute.start_secs)}
+        <div className="glass-badge absolute left-3 top-3 z-20 flex items-center rounded text-[11px] font-medium text-white">
+          <span role="status" className="pointer-events-none flex items-center gap-1.5 py-1 pl-2 pr-2">
+            <VolumeX size={12} />
+            Audio muted by Twitch · {formatVodTime(activeMute.end_secs - activeMute.start_secs)}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              const v = videoRef.current;
+              if (v) v.currentTime = skipMutedTarget(activeMute, v.duration);
+            }}
+            className="flex items-center gap-1 self-stretch rounded-r border-l border-white/15 px-2 font-semibold text-white/90 transition-colors hover:bg-white/10 hover:text-white"
+            title="Skip to where the sound comes back"
+          >
+            Skip
+            <SkipForward size={11} />
+          </button>
         </div>
       )}
 

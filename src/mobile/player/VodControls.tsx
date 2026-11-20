@@ -4,8 +4,9 @@
 // a storyboard frame while scrubbing), then back and forward ten seconds and
 // the speed. Play and pause stay the center button's, as on a live stream.
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowClockwise, ArrowCounterClockwise, Check } from 'phosphor-react';
+import { ArrowClockwise, ArrowCounterClockwise, Check, SkipForward, SpeakerSlash } from 'phosphor-react';
 import type { VodStartInfo } from '../../types';
+import { mutedRangeAt, skipMutedTarget } from '../../hooks/useMutedSegmentNotice';
 import { MobileSheet } from '../ui/MobileSheet';
 import { VOD_RATES, clock, rateLabel, seekAt, storyboardFrame } from '../watch/channelMedia';
 
@@ -140,6 +141,37 @@ export const VodSeekBar: React.FC<{
         <span>{clock(duration)}</span>
       </div>
     </div>
+  );
+};
+
+/** While the playhead is in a stretch Twitch muted, a pill over the seek
+ *  bar's right end that jumps to where the sound comes back (SN-282). */
+export const VodMutedSkip: React.FC<{
+  vod: VodStartInfo;
+  position: number;
+  length: number;
+  onSeek: (seconds: number) => void;
+  onTouch: () => void;
+}> = ({ vod, position, length, onSeek, onTouch }) => {
+  const range = mutedRangeAt(vod.muted_segments, position);
+  if (!range) return null;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onSeek(skipMutedTarget(range, length));
+        onTouch();
+      }}
+      className="mb-1 flex h-8 items-center gap-1.5 self-end rounded-full bg-glass-ink/45 pl-3 pr-2.5 text-[12px] font-semibold text-white active:scale-95 transition-transform"
+      aria-label="Skip the muted part"
+    >
+      <SpeakerSlash size={13} weight="bold" className="text-white/80" />
+      Muted
+      <span className="h-3 w-px bg-white/25" aria-hidden />
+      Skip
+      <SkipForward size={13} weight="fill" />
+    </button>
   );
 };
 

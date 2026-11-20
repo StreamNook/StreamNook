@@ -33,7 +33,7 @@ import { MobileOfflineRoom } from './MobileOfflineRoom';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 import { registerReplayClock } from '../../stores/vodReplayStore';
-import { VodSeekBar, VodTransport, useVodClock } from './VodControls';
+import { VodMutedSkip, VodSeekBar, VodTransport, useVodClock } from './VodControls';
 import { recordedLine, seekTarget } from '../watch/channelMedia';
 import { useChannelSheet } from '../watch/MobileChannelSheet';
 import { createZoomSurface, fillScale, registerZoomSurface, type ZoomSurface } from './videoFill';
@@ -1114,6 +1114,15 @@ export const MobilePlayer: React.FC<{
                 : undefined
           }
         >
+          {vod && (
+            <VodMutedSkip
+              vod={vod}
+              position={vodClock.position}
+              length={vodClock.length}
+              onSeek={seekVod}
+              onTouch={scheduleHide}
+            />
+          )}
           {vod && (
             <VodSeekBar
               vod={vod}
