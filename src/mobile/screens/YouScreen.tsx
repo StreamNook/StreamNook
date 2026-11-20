@@ -12,7 +12,6 @@ import { usePhonePrefs } from '../phonePrefs';
 import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '../updateCheck';
 import { OwnIdentityCard, SignedOutIdentityCard } from '../profile/OwnIdentityHeader';
-import { OwnAccoladeSection } from '../profile/OwnAccoladeSection';
 import { SettingsDirectory } from './SettingsSearch';
 import { AccountsCard } from '../profile/AccountsCard';
 
@@ -65,9 +64,6 @@ export const YouScreen: React.FC = () => {
           <SignedOutIdentityCard waiting={isAuthenticated} />
         )}
       </div>
-
-      {/* Your accolades, under the card; held while you are known to be a member. */}
-      {currentUser?.user_id && <OwnAccoladeSection userId={currentUser.user_id} />}
 
       {/* Only rendered when there is genuinely a newer build. Sideloaded apps
           get no store notification, so without this nobody ever learns an

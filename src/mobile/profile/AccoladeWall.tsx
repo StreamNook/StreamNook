@@ -13,11 +13,7 @@ import { WALL, wallColumns } from './accoladeWallLayout';
 /** The desktop medallion's bevel: inset light and shade, no outer glow. */
 const MEDALLION_BEVEL = 'inset 1.5px 1.5px 1px rgba(255,255,255,0.35), inset -1.5px -1.5px 3px rgba(0,0,0,0.30)';
 
-export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string; className?: string }> = ({
-  wall,
-  accent,
-  className = 'mt-5',
-}) => {
+export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string }> = ({ wall, accent }) => {
   const [showAll, setShowAll] = useState(false);
   const [tapId, setTapId] = useState<string | null>(null);
   if (wall.items.length === 0) return null;
@@ -28,7 +24,7 @@ export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string; c
   return (
     // No scroll anchoring: opening the locked ones grows the wall below the tap.
     <div
-      className={`${className} glass-panel rounded-xl [overflow-anchor:none]`}
+      className="mt-5 glass-panel rounded-xl [overflow-anchor:none]"
       style={{ ...accentBorder(accent, 0.3), padding: WALL.pad }}
     >
       <div style={{ height: WALL.header }}>

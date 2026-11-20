@@ -1,5 +1,5 @@
-// Your own accolade wall as Rust builds it (`own_accolades`): the same answer on
-// desktop Settings > Profile and the Android You tab. The wall Rust saved on
+// Your own accolade wall as Rust builds it (`own_accolades`), for desktop
+// Settings > Profile (the phones show no wall of your own). The wall Rust saved on
 // disk last time paints first (`own_accolades_cached`, a local read), then the
 // fresh one replaces it. Rust counts what every platform counts, saves what you
 // earn, and says `own-accolades-changed` after a save or a finished points walk;
@@ -43,9 +43,9 @@ export function answerOnFailure(
   return { userId, wall: prev?.userId === userId ? prev.wall : null, fresh: true };
 }
 
-/** The last wall each account drew this session, so a You tab or Settings page
- *  mounted again draws it on its first frame at its real size, instead of a
- *  held slot that a bigger wall would then push past. */
+/** The last wall each account drew this session, so a Settings page mounted
+ *  again draws it on its first frame at its real size, instead of a held slot
+ *  that a bigger wall would then push past. */
 const lastWall = new Map<string, AccoladeWallView>();
 
 /** Remembers what an account's wall is now (nothing for "no wall"). */

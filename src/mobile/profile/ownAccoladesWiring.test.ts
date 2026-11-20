@@ -24,17 +24,12 @@ describe('your wall comes from Rust', () => {
     expect(hook).toContain("'own-accolades-changed'");
   });
 
-  it('the You tab draws it under the identity card for a signed-in account', () => {
+  it('the phone You tab draws no wall of yours: nothing there can be equipped (Brandon 2026-11-20)', () => {
     const you = read('src/mobile/screens/YouScreen.tsx');
-    expect(you).toContain('{currentUser?.user_id && <OwnAccoladeSection userId={currentUser.user_id} />}');
-    expect(you.indexOf('<OwnIdentityCard')).toBeLessThan(you.indexOf('<OwnAccoladeSection'));
-  });
-
-  it('the section draws the shared wall in a slot held at the shared layout height', () => {
-    const section = read('src/mobile/profile/OwnAccoladeSection.tsx');
-    expect(section).toContain('<AccoladeWall wall={wall} className="" />');
-    expect(section).toContain('collapsedWallHeight()');
-    expect(section).toContain('ownWallSlot(');
+    expect(you).not.toMatch(/Accolade/);
+    expect(existsSync(resolve(root, 'src/mobile/profile/OwnAccoladeSection.tsx'))).toBe(false);
+    const phone = walk(resolve(root, 'src/mobile')).filter((f) => !/\.test\.tsx?$/.test(f));
+    expect(phone.filter((f) => /\buseOwnAccolades\(/.test(readFileSync(f, 'utf8')))).toEqual([]);
   });
 
   it('the wall takes its measurements from the layout, not from literals', () => {
