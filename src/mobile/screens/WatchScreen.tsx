@@ -55,8 +55,10 @@ import {
   useChatTabsVisible,
   useViewingStreamChat,
 } from '../chat/ChatTabStrip';
-import { useMentionsStore } from '../mentions/mentionInbox';
+import { openPinnedMention, useMentionsStore } from '../mentions/mentionInbox';
 import { MentionContextCard } from '../mentions/MentionContextCard';
+import { MentionPinsView } from '../../components/mentions/MentionPins';
+import { useMentionPins } from '../../hooks/useMentionPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { usePinsOpen } from '../watch/pinsOpen';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
@@ -268,6 +270,8 @@ export const WatchScreen: React.FC = () => {
   const mentionCard = useMentionsStore((s) => s.contextCard);
   const activeChatRoom = useChatTabsStore((s) => s.activeChannel);
   const showMentionCard = !!mentionCard && mentionCard.room === activeChatRoom;
+  // Mentions pinned over the chat on screen (SN-284): Rust's list for its room.
+  const mentionPins = useMentionPins(activeChatRoom ?? '');
   // The viewer picked the audio-only rendition: there is no picture to float.
   const audioOnly = useAppStore((s) => s.activeQuality === 'audio_only');
   const pipOnLeave = useAppStore((s) => s.settings.video_player?.pip_on_leave) !== false;
@@ -2263,8 +2267,10 @@ export const WatchScreen: React.FC = () => {
               className={
                 // The floating landscape column is for reading the room, so
                 // the stream's own banners (pins, hype train) stay out of it;
-                // they are all still one rotation away.
-                !chatOverlay && ((streamScoped && currentHypeTrain) || pinned.length > 0 || showMentionCard)
+                // they are all still one rotation away. Mentions pinned for
+                // you belong to the room, so they show there too (SN-284).
+                (!chatOverlay && ((streamScoped && currentHypeTrain) || pinned.length > 0 || showMentionCard)) ||
+                mentionPins.length > 0
                   ? // Pure layout now: no background, no border, no blur, no
                     // shadow. Each child already carries its own container
                     // (PinnedBanner is an sn-popover, the hype train draws its
@@ -2291,10 +2297,24 @@ export const WatchScreen: React.FC = () => {
                     : (chatTabsVisible ? CHAT_TAB_STRIP_H : 0) + (verticalGrown ? VERTICAL_HANDLE_H : 0)),
               }}
             >
+              {/* First in DOM, so lowest on screen: mentions pinned for you
+                  (SN-284), under the stream's banners, which never move for
+                  them. A tap opens the mention in this chat (the pane on
+                  screen takes the jump); in the lower third it grows the chat
+                  first. */}
+              <MentionPinsView
+                key={activeChatRoom ?? ''}
+                live={mentionPins}
+                phone
+                onOpen={(pin) => {
+                  if (verticalLower) moveVerticalChat('expanded');
+                  openPinnedMention(pin.entry);
+                }}
+              />
               {/* The hype train belongs to the STREAM, not to whichever chat
                   tab you are reading. Showing it over another room's chat
                   credits it to the wrong channel. */}
-              {streamScoped && currentHypeTrain && (
+              {!chatOverlay && streamScoped && currentHypeTrain && (
                 <HypeTrainBanner
                   train={currentHypeTrain}
                   onExpire={() => useAppStore.getState().setCurrentHypeTrain(null)}
@@ -2302,7 +2322,7 @@ export const WatchScreen: React.FC = () => {
               )}
               {/* Folded to its line in the lower third: a tap grows the chat
                   with the pin open (SN-40). */}
-              <PinnedBanner
+              {!chatOverlay && <PinnedBanner
                 pins={pinned}
                 channelId={chatChannelId ?? undefined}
                 expanded={pins.open && !verticalLower}
@@ -2315,9 +2335,9 @@ export const WatchScreen: React.FC = () => {
                     : () => pins.setOpen(!pins.open)
                 }
                 collapsedStyle={pins.style}
-              />
+              />}
               {/* Last in DOM, so first on screen: the mention you just opened. */}
-              {showMentionCard &&
+              {!chatOverlay && showMentionCard &&
                 mentionCard &&
                 (verticalLower ? (
                   <VerticalMentionStrip onOpen={() => moveVerticalChat('expanded')} />

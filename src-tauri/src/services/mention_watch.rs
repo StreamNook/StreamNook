@@ -199,6 +199,9 @@ impl RemoteMention {
             read: false,
             removed: false,
             seen_live: false,
+            // Pulled from the server: said while away, so it never pins.
+            pin_from_ms: None,
+            pin_dismissed: false,
         })
     }
 }

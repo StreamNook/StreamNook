@@ -30,6 +30,10 @@ import { TogetherSheet } from '../player/TogetherSheet';
 import { formatViewerCount } from '../../utils/streamStats';
 import { tabIsStream } from '../watch/closeVideoRule';
 import { usePageState } from '../ui/usePageState';
+import { MentionPinsView } from '../../components/mentions/MentionPins';
+import { useMentionPins } from '../../hooks/useMentionPins';
+import { MentionContextCard } from '../mentions/MentionContextCard';
+import { openPinnedMention, useMentionsStore } from '../mentions/mentionInbox';
 
 /** The Chats header's room strip: 40 px capsules with 7 px of air above and
  *  below, so they sit clear of the separator under them. */
@@ -132,6 +136,12 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
     observer.observe(el);
     return () => observer.disconnect();
   }, [hasPins, pinsOpen]);
+  // Mentions pinned over the room on screen (SN-284), and the card for one
+  // too old to scroll to. They float over the list (never in pinsBox), so the
+  // rows never move when one comes or goes. Nothing is asked while hidden.
+  const mentionPins = useMentionPins(shown ? (activeChannel ?? '') : '');
+  const mentionCard = useMentionsStore((s) => s.contextCard);
+  const showMentionCard = shown && !!mentionCard && mentionCard.room === activeChannel;
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
   // The room the watch layer shows now (playing, loading, or its offline room):
   // nothing to start for it. Read from the player's own state, which lets go the
@@ -405,6 +415,21 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
               </div>
             )}
             {hasPins && <div className="shrink-0" style={{ height: pinsBox }} />}
+            {(mentionPins.length > 0 || showMentionCard) && (
+              // Under the room's own pin (z-19: its open card floats over these).
+              <div
+                className={`absolute left-0 right-0 px-2.5 z-[19] pointer-events-none flex flex-col gap-1 ${hasPins ? 'pt-0.5' : 'pt-3'}`}
+                style={{ top: hasPins ? pinsBox : 0 }}
+              >
+                {showMentionCard && mentionCard && <MentionContextCard entry={mentionCard} />}
+                <MentionPinsView
+                  key={activeChannel ?? ''}
+                  live={mentionPins}
+                  phone
+                  onOpen={(pin) => openPinnedMention(pin.entry)}
+                />
+              </div>
+            )}
             <MobileChatPane strip={false} paused={!shown} idle={idle} surface="chats" />
           </div>
         </>

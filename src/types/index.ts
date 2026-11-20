@@ -249,6 +249,11 @@ export interface ChatDesignSettings {
   // Keep a mention or reply to you tinted the whole time it is on screen.
   // Typed in Rust (ChatDesignSettings), which owns the default: off.
   mention_hold?: boolean;
+  // SN-284: a mention or reply to you received live stays pinned at the top
+  // of its chat for pin_mentions_minutes (1-60, default 5). Off by default.
+  // Typed in Rust (ChatDesignSettings); Rust decides the pins.
+  pin_mentions?: boolean;
+  pin_mentions_minutes?: number;
   show_timestamps?: boolean; // Show timestamp next to each message
   show_timestamp_seconds?: boolean; // Include seconds in timestamps
   timestamp_format?: '12h' | '24h'; // Formatted in Rust; default 12h
@@ -970,6 +975,21 @@ export interface MentionSettings {
 // One entry in the mentions inbox (services/mention_inbox.rs `MentionEntry`).
 // Rust files, reads and removes them; the pages only draw them.
 export type MentionKind = 'mention' | 'reply' | 'word';
+
+/** One pinned mention (SN-284, Rust `mention_inbox::MentionPin`): the newest
+ *  copy of a message, when its pin ends (Rust's clock) and how many copies of
+ *  the same message it stands for. */
+export interface MentionPin {
+  entry: MentionEntry;
+  until_ms: number;
+  run: number;
+}
+
+/** `get_mention_pins`: newest first, and Rust's clock when read. */
+export interface MentionPins {
+  pins: MentionPin[];
+  now_ms: number;
+}
 
 export interface MentionEntry {
   /** The platform's message id. */

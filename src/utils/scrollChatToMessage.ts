@@ -23,6 +23,9 @@ export interface ScrollToMessageOptions {
   smooth?: boolean;
   /** Flash the row once it lands (~2 s), so it is findable by eye. */
   flash?: boolean;
+  /** Look only inside this element (a chat pane). A phone keeps a hidden
+   *  surface mounted with the same room, whose row would match first. */
+  root?: ParentNode | null;
 }
 
 /** How long a jumped-to row flashes. Matches the CSS animation. */
@@ -38,16 +41,17 @@ export const JUMP_FLASH_MS = 2000;
  * pseudo-element animating opacity only (mobile.css), so it never repaints the
  * row's text.
  */
-export function flashChatMessage(messageId: string): void {
+export function flashChatMessage(messageId: string, root: ParentNode | null = null): void {
   const sel = `[data-message-id="${CSS.escape(messageId)}"]`;
-  const el = document.querySelector<HTMLElement>(sel);
+  const scope = root ?? document;
+  const el = scope.querySelector<HTMLElement>(sel);
   if (!el) return;
   el.removeAttribute('data-sn-flash');
   // Restart the animation when the same row is flashed twice in a row.
   void el.offsetWidth;
   el.setAttribute('data-sn-flash', '');
   window.setTimeout(() => {
-    document.querySelector<HTMLElement>(sel)?.removeAttribute('data-sn-flash');
+    scope.querySelector<HTMLElement>(sel)?.removeAttribute('data-sn-flash');
   }, JUMP_FLASH_MS + 100);
 }
 
@@ -87,9 +91,10 @@ export function scrollChatToMessage(
   messageId: string,
   options?: ScrollToMessageOptions,
 ): boolean {
-  const { align = 'center', smooth = true, flash = false } = options ?? {};
+  const { align = 'center', smooth = true, flash = false, root = null } = options ?? {};
+  const scope = root ?? document;
 
-  const el = document.querySelector<HTMLElement>(
+  const el = scope.querySelector<HTMLElement>(
     `[data-message-id="${CSS.escape(messageId)}"]`,
   );
   if (!el) return false;
@@ -99,7 +104,7 @@ export function scrollChatToMessage(
 
   const behavior: ScrollBehavior = smooth ? 'smooth' : 'auto';
   container.scrollTo({ top: targetFor(container, el, align), behavior });
-  if (flash) flashChatMessage(messageId);
+  if (flash) flashChatMessage(messageId, root);
 
   // One correction pass, and it is not optional on mobile.
   //
@@ -109,7 +114,7 @@ export function scrollChatToMessage(
   // heights resolve, every row below shifts, and the target drifts off centre -
   // further the longer the jump. Re-measuring after layout settles fixes it.
   window.setTimeout(() => {
-    const again = document.querySelector<HTMLElement>(
+    const again = scope.querySelector<HTMLElement>(
       `[data-message-id="${CSS.escape(messageId)}"]`,
     );
     const c = again?.closest<HTMLElement>('.overflow-y-auto');

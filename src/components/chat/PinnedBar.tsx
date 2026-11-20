@@ -54,6 +54,9 @@ interface PinnedBarProps {
   onBadgeClick?: (badgeKey: string, badgeInfo: { url?: string; image_url_4x?: string }) => void;
   /** A pin's text with the channel's emotes, as chat draws it. */
   renderText: (text: string, keyPrefix: string, emoteClass: string) => ReactNode;
+  /** Drawn under the bar (or the open card) in the same column: the pinned
+   *  mentions (SN-284), so the Twitch pin never moves when they come and go. */
+  after?: ReactNode;
 }
 
 export function PinnedBar({
@@ -68,16 +71,20 @@ export function PinnedBar({
   onUnpin,
   onBadgeClick,
   renderText,
+  after,
 }: PinnedBarProps) {
   const design = useAppStore((s) => s.settings.chat_design);
-  if (pins.length === 0) return null;
+  // With `after` the column stays mounted with no pin, so what it holds (the
+  // pinned mentions) keeps its place and state when a pin comes or goes.
+  if (pins.length === 0 && !after) return null;
+  const hasPins = pins.length > 0;
   return (
     <div
       className={`absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center ${hidden ? 'hidden' : ''}`}
       style={{ top }}
     >
       <AnimatePresence>
-        {expanded && (
+        {hasPins && expanded && (
           <motion.div
             initial={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
             animate={{ opacity: 1, y: 0, scale: 1, height: 'auto' }}
@@ -261,7 +268,7 @@ export function PinnedBar({
           instead of hiding the pin entirely. Click to expand. Opt-out via
           chat_design.pinned_collapsed_style === 'hidden'. */}
       <AnimatePresence>
-        {!expanded && (design?.pinned_collapsed_style ?? 'bar') !== 'hidden' && (() => {
+        {hasPins && !expanded && (design?.pinned_collapsed_style ?? 'bar') !== 'hidden' && (() => {
           const pin = pins[0];
           return (
             <motion.button
@@ -306,6 +313,7 @@ export function PinnedBar({
           );
         })()}
       </AnimatePresence>
+      {after && <div className={`${hasPins ? 'mt-1.5' : 'mt-2'} flex w-full justify-center`}>{after}</div>}
     </div>
   );
 }

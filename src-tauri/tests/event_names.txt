@@ -78,6 +78,7 @@ membership-status-changed
 mention-arrived
 mention-inbox-changed
 mention-notify
+mention-pins-changed
 mirrored-notification
 mirrored-notification-activate
 multi-nook://meta

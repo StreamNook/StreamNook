@@ -1241,6 +1241,39 @@
   {
    "page": "chat",
    "section": "Mentions & Replies",
+   "title": "Pin mentions",
+   "paths": [
+    "chat_design.pin_mentions"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "A mention or a reply to you stays pinned at the top of its chat for a while, in case you were away when it landed.",
+   "aliases": [
+    "pinned mentions",
+    "keep mentions on top",
+    "missed mentions",
+    "pinned highlights"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "For",
+   "paths": [
+    "chat_design.pin_mentions_minutes"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": [
+    "pin duration"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
    "title": "@name style",
    "paths": [],
    "nested": false,

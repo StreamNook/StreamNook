@@ -6,7 +6,7 @@
 //    history backfill, where the platform has one (Twitch), then look again.
 // 3. Still not there: the entry is pinned over the chat as the "Older than
 //    chat history" card (WatchScreen draws it), with Dismiss.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { ensureChannelHistory } from '../../stores/chatConnectionStore';
 import type { BackendChatMessage } from '../../services/twitchChat';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
@@ -38,7 +38,12 @@ export function useMentionJump({
   login,
   provider,
   channelId,
+  rootRef,
 }: {
+  /** The pane's own element: the jump looks only inside it, and a pane that
+   *  is not on screen (a kept surface under another) leaves the jump to the
+   *  one that is. */
+  rootRef?: RefObject<HTMLElement | null>;
   activeChannel: string | null;
   messages: readonly (string | BackendChatMessage)[];
   getMessageId: (m: string | BackendChatMessage) => string | null;
@@ -69,6 +74,10 @@ export function useMentionJump({
       return;
     }
     if (activeChannel !== pending.room) return later(500);
+    // Chats stays mounted (display: none) under the full player, on the same
+    // room: only the pane on screen takes the jump.
+    const root = rootRef?.current ?? null;
+    if (root && root.getClientRects().length === 0) return later(500);
     p.roomSeenAt ??= now;
 
     if (messages.some((m) => getMessageId(m) === pending.id)) {
@@ -78,7 +87,7 @@ export function useMentionJump({
       let tries = 0;
       const land = () => {
         pause(true, { force: true });
-        if (scrollChatToMessage(pending.id, { align: 'center', flash: true }) || ++tries >= 6) {
+        if (scrollChatToMessage(pending.id, { align: 'center', flash: true, root }) || ++tries >= 6) {
           useMentionsStore.setState({ pendingJump: null });
           return;
         }
@@ -107,5 +116,5 @@ export function useMentionJump({
     if (now - p.backfillDoneAt < AFTER_BACKFILL_MS) return later(AFTER_BACKFILL_MS - (now - p.backfillDoneAt));
     p.landed = true;
     useMentionsStore.setState({ pendingJump: null, contextCard: pending });
-  }, [pending, activeChannel, messages, getMessageId, pause, login, provider, channelId, tick]);
+  }, [pending, activeChannel, messages, getMessageId, pause, login, provider, channelId, tick, rootRef]);
 }

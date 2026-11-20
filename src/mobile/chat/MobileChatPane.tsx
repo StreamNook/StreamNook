@@ -597,6 +597,9 @@ export const MobileChatPane: React.FC<{
   // jump gets undone before the glide finishes. `force` because a deliberate
   // navigation must beat the settle window that exists to swallow stray scroll
   // reports.
+  // The pane's own element: jumps look for their row only inside it (Chats
+  // stays mounted, hidden, under the full player on the same room).
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const handleReplyClick = useCallback(
     (parentMsgId: string) => {
       pause(true, { force: true });
@@ -604,15 +607,17 @@ export const MobileChatPane: React.FC<{
       // enough to find it by eye, short enough not to read as a selection. The
       // same flash a mention jump uses, and it shows on a parent that is
       // itself a mention, which the row's own highlight prop could not.
-      const ok = scrollChatToMessage(parentMsgId, { align: 'center', flash: true });
+      const ok = scrollChatToMessage(parentMsgId, { align: 'center', flash: true, root: paneRef.current });
       if (!ok) addToast('Original message is no longer in chat history', 'info');
     },
     [pause, addToast],
   );
 
-  // Opening a mention (an inbox row or a notification) lands here once its
-  // chat is on screen: scroll and flash, or one backfill, or the context card.
+  // Opening a mention (an inbox row, a notification or a pin) lands here once
+  // its chat is on screen: scroll and flash, or one backfill, or the context
+  // card. Only inside this pane, and only while it is the one on screen.
   useMentionJump({
+    rootRef: paneRef,
     activeChannel,
     messages,
     getMessageId,
@@ -1070,7 +1075,6 @@ export const MobileChatPane: React.FC<{
   );
 
   // Rides above the composer's suggestion strip while it covers the list.
-  const paneRef = useRef<HTMLDivElement | null>(null);
   const overlayLift = useComposerRiserLift(paneRef, listRef, isPaused, surface);
   // The paused hint's column: the overlay's middle (the list less its 10 px and 56 px sides and
   // the badge's own 16 px of padding), at the hint's 10.5 px.

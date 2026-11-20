@@ -2849,6 +2849,8 @@ pub fn run() {
             remove_mention,
             clear_mention_inbox,
             open_mention,
+            get_mention_pins,
+            dismiss_mention_pin,
             set_visible_mention_rooms,
             mention_watch_pull,
             mention_push_arrived,

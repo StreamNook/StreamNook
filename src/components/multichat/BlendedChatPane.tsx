@@ -14,7 +14,11 @@ import ChatMessageList from '../ChatMessageList';
 import { ProviderLogo } from '../ProviderLogo';
 import { useChatConnectionStore } from '../../stores/chatConnectionStore';
 import { useChatUserStore } from '../../stores/chatUserStore';
-import { parseKey } from '../../utils/providerKey';
+import { parseKey, sliceLookupKey } from '../../utils/providerKey';
+import { invoke } from '@tauri-apps/api/core';
+import { MentionPins } from '../mentions/MentionPins';
+import { MentionContextCard } from '../mentions/MentionContextCard';
+import type { MentionEntry, MentionPin } from '../../types';
 import { openProfilePopup } from '../../utils/openProfilePopup';
 import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '../../types/providers';
 import { parseMessage, type BackendChatMessage } from '../../services/twitchChat';
@@ -271,6 +275,39 @@ export function BlendedChatPane({
       highlightTimer.current = setTimeout(() => setHighlightedMessageId(null), 2000);
     },
     [getMessageId, setChatPaused],
+  );
+
+  // Pinned mentions over the merged feed (SN-284): the same pins as each
+  // source's own chat, opened here. A message no longer in the feed shows as
+  // the "Older than chat history" card instead.
+  const pinRooms = useMemo(
+    () => (readOnly ? '' : channels.map((c) => sliceLookupKey(provOf(c), c.channel)).join('|')),
+    [channels, readOnly],
+  );
+  const pinsMixed = new Set(channels.map(provOf)).size > 1;
+  // The card belongs to the rooms it was opened in: another set of chats
+  // never shows it.
+  const [pinCardFor, setPinCardFor] = useState<{ rooms: string; entry: MentionEntry } | null>(null);
+  const pinCard = pinCardFor && pinCardFor.rooms === pinRooms ? pinCardFor.entry : null;
+  const setPinCard = useCallback(
+    (entry: MentionEntry | null) => setPinCardFor(entry ? { rooms: pinRooms, entry } : null),
+    [pinRooms],
+  );
+  const openPinnedMention = useCallback(
+    (pin: MentionPin) => {
+      const { entry } = pin;
+      // Read it and drop its pin in Rust without waiting: the scroll is now.
+      invoke('open_mention', { id: entry.id }).catch((err) => {
+        Logger.warn('[BlendedChat] open_mention for a pin failed:', err);
+      });
+      if (messagesRef.current.some((m) => getMessageId(m) === entry.id)) {
+        setPinCard(null);
+        handleReplyClick(entry.id);
+      } else {
+        setPinCard(entry);
+      }
+    },
+    [getMessageId, handleReplyClick, setPinCard],
   );
 
   // ----- composer -----------------------------------------------------------
@@ -576,6 +613,16 @@ export function BlendedChatPane({
           showSource={channels.length > 1}
           scrollToBottomRef={listScrollToBottomRef}
         />
+        {/* Pinned mentions (SN-284), and over them, in its own layer so they
+            never move, the card for one too old to scroll to. */}
+        <div className="pointer-events-none absolute left-3 right-3 top-0 z-20 flex flex-col items-center pt-2">
+          <MentionPins rooms={pinRooms} mixed={pinsMixed} onOpen={openPinnedMention} />
+        </div>
+        {pinCard && (
+          <div className="pointer-events-none absolute left-3 right-3 top-0 z-[21] flex flex-col items-center">
+            <MentionContextCard entry={pinCard} onDismiss={() => setPinCard(null)} />
+          </div>
+        )}
         {/* Identical to the core app's paused indicator (ChatWidget) so the resume
             affordance reads the same everywhere. */}
         {paused && (

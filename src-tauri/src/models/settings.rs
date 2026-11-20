@@ -364,6 +364,14 @@ pub struct ChatDesignSettings {
     /// on screen, instead of only flashing as it lands.
     #[serde(default)]
     pub mention_hold: bool,
+    /// SN-284: a mention or reply to you received live stays pinned at the
+    /// top of its chat for `pin_mentions_minutes` (services::mention_inbox
+    /// decides the pins). Off by default.
+    #[serde(default)]
+    pub pin_mentions: bool,
+    /// How long a pinned mention stays, in minutes (1 to 60; Rust clamps).
+    #[serde(default = "default_pin_mentions_minutes")]
+    pub pin_mentions_minutes: u32,
     #[serde(default)]
     pub show_timestamps: bool, // Show timestamp next to each message
     #[serde(default)]
@@ -735,6 +743,10 @@ where
 fn default_emote_margin() -> f64 {
     0.125
 }
+fn default_pin_mentions_minutes() -> u32 {
+    5
+}
+
 fn default_emote_hover_size() -> u32 {
     96
 }
@@ -787,6 +799,8 @@ impl Default for ChatDesignSettings {
             reply_color: "#ff6b6b".to_string(),
             mention_animation: true,
             mention_hold: false,
+            pin_mentions: false,
+            pin_mentions_minutes: default_pin_mentions_minutes(),
             show_timestamps: false,
             show_timestamp_seconds: false,
             timestamp_format: default_timestamp_format(),

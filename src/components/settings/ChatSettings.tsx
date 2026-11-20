@@ -33,7 +33,8 @@ import { sideChatMin } from '../../mobile/watch/sideChat';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { CURRENCY_OPTIONS } from '../../services/currencyService';
 import { EVENT_CATEGORIES, EVENT_TEMPLATE_EXAMPLES, PROVIDER_CATEGORY_LABELS, PROVIDER_EVENT_CATEGORIES } from '../overlay/overlayConfig';
-import type { ChatEventCategory, ChatEventSettings, CommandFilter } from '../../types';
+import type { ChatEventCategory, ChatEventSettings, CommandFilter, MentionPin } from '../../types';
+import { MentionPinRow } from '../mentions/MentionPins';
 import SpellcheckDictionary from './SpellcheckDictionary';
 import IgnoredPhrasesSettings from './IgnoredPhrasesSettings';
 import CustomSoundsSettings from './CustomSoundsSettings';
@@ -76,6 +77,31 @@ const BLEND_PLATFORMS: ProviderId[] = CHAT_PROVIDERS;
 // Muted grey, so the counter reads as chrome rather than competing with the
 // message. Matches --color-text-secondary in the default theme.
 const REPEAT_DEFAULT_COLOR = '#8b8b8b';
+
+/** How long a mention can stay pinned (SN-284); Rust keeps it within 1-60. */
+const PIN_MINUTES = [1, 2, 5, 10, 15, 30, 60];
+
+/** The Pin mentions preview: a fixed sample, so it draws with the switch off
+ *  and signed out. */
+const SAMPLE_PIN: MentionPin = {
+  entry: {
+    id: 'sample-pin',
+    platform: 'twitch',
+    room: 'sample',
+    channel_login: 'sample',
+    sender_id: '0',
+    sender_login: 'pixelfox',
+    sender_name: 'pixelfox',
+    sender_color: '#1E90FF',
+    text: '@you are you still here? the raid is starting',
+    kind: 'mention',
+    at_ms: 0,
+    read: true,
+    removed: false,
+  },
+  until_ms: 0,
+  run: 1,
+};
 
 // Rows the user card can show, in the order they appear on the card itself.
 // Everything defaults to on; the toggle stores `false` to hide.
@@ -568,6 +594,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     reply_color: stored?.reply_color ?? '#ff6b6b',
     mention_animation: stored?.mention_animation ?? true,
     mention_hold: stored?.mention_hold ?? false,
+    pin_mentions: stored?.pin_mentions ?? false,
+    // What Rust uses: kept within 1 to 60 (mention_inbox::pin_window_ms).
+    pin_mentions_minutes: Math.min(60, Math.max(1, stored?.pin_mentions_minutes ?? 5)),
     show_timestamps: stored?.show_timestamps ?? false,
     show_timestamp_seconds: stored?.show_timestamp_seconds ?? false,
     timestamp_format: stored?.timestamp_format ?? '12h',
@@ -2278,6 +2307,53 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             </div>
           )}
         </SettingsRow>
+
+        {/* SN-284: every app (Rust decides the pins; each shell draws them). */}
+          <SettingsRow
+            title="Pin mentions"
+            onReset={resetFor(['chat_design.pin_mentions', false], ['chat_design.pin_mentions_minutes', 5])}
+            description="A mention or a reply to you stays pinned at the top of its chat for a while, in case you were away when it landed."
+            help={
+              IS_MOBILE
+                ? 'Tap a pin to jump to the message. The X puts it away.'
+                : 'Click a pin to jump to the message. The X puts it away in every window.'
+            }
+            control={
+              <Toggle
+                enabled={cd.pin_mentions === true}
+                onChange={() =>
+                  void setSettingsFields({ 'chat_design.pin_mentions': cd.pin_mentions !== true }).catch(() => {})
+                }
+              />
+            }
+          >
+            {cd.pin_mentions === true && (
+              <SubControls>
+                <SubControl
+                  title="For"
+                  onReset={resetFor(['chat_design.pin_mentions_minutes', 5])}
+                  control={
+                    <Dropdown<number>
+                      value={cd.pin_mentions_minutes}
+                      onChange={(v) => void setSettingsFields({ 'chat_design.pin_mentions_minutes': v }).catch(() => {})}
+                      ariaLabel="How long a mention stays pinned"
+                      // A value set elsewhere (an imported file) still shows.
+                      options={[...new Set([...PIN_MINUTES, cd.pin_mentions_minutes])]
+                        .sort((a, b) => a - b)
+                        .map((m) => ({ value: m, label: m === 1 ? '1 minute' : `${m} minutes` }))}
+                    />
+                  }
+                />
+              </SubControls>
+            )}
+            <div className="pt-3">
+              <SettingPreview caption="a mention pinned over chat">
+                <div className="glass-panel flex justify-center rounded-lg px-3 py-3" aria-hidden inert>
+                  <MentionPinRow pin={SAMPLE_PIN} more={1} phone={IS_MOBILE} />
+                </div>
+              </SettingPreview>
+            </div>
+          </SettingsRow>
 
         {IS_MOBILE && (
           <SettingsRow

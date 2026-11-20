@@ -158,7 +158,8 @@ import { usemultiNookStore } from '../stores/multiNookStore';
 import { usePinStore } from '../stores/pinStore';
 import { useVodReplayStore, useVodReplaySnapshot, setVodReplayShowing } from '../stores/vodReplayStore';
 import { SegmentedSelect } from './settings/_primitives';
-import type { TwitchStream, HypeTrainData, MentionEntry } from '../types';
+import type { TwitchStream, HypeTrainData, MentionEntry, MentionPin } from '../types';
+import { MentionPins } from './mentions/MentionPins';
 
 import { Logger } from '../utils/logger';
 import { stopArgs, stopToast } from '../utils/dropsStop';
@@ -3245,6 +3246,36 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   }, [mentionRooms, mentionChannelId, getMessageId]);
   const shownMentionCard = mentionCard && mentionCard.rooms === mentionRooms ? mentionCard.entry : null;
 
+  // A pinned mention clicked (SN-284): opened here, in this chat only (never
+  // through the window-wide jump hand-off, which another pane showing the
+  // same room could take). Rust marks it read and drops its pin; then it is
+  // scrolled to, or after one history fetch, or shown as the card.
+  const pinsMixed = blendActive && new Set(blendSources.map((c) => c.provider)).size > 1;
+  const openPinnedMention = useCallback(
+    async (pin: MentionPin) => {
+      const rooms = mentionRooms;
+      const { entry } = pin;
+      // Read it and drop its pin in Rust without waiting: the scroll is now.
+      invoke('open_mention', { id: entry.id }).catch((err) => {
+        Logger.warn('[ChatWidget] open_mention for a pin failed:', err);
+      });
+      const show = () =>
+        messagesRef.current.some((m) => getMessageId(m) === entry.id) &&
+        mentionScrollRef.current(entry.id, { highlight: true, align: 'center' });
+      if (show()) return;
+      if (entry.platform === 'twitch' && entry.channel_id) {
+        await ensureChannelHistory(entry.room, entry.channel_id);
+        // The backfilled rows still have to land: look for up to 1.5 s.
+        for (let i = 0; i < 6; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          if (show()) return;
+        }
+      }
+      setMentionCard({ rooms, entry });
+    },
+    [mentionRooms, getMessageId],
+  );
+
   // ---- Keyboard moderation controller --------------------------------------
   // Bridges the global keybinding engine to this chat. Only the primary chat
   // (no channelOverride) drives keyboard moderation; popout/MultiNook instances
@@ -5404,6 +5435,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           }
           onBadgeClick={handleBadgeClick}
           renderText={renderPinTextWithEmotes}
+          // Pinned mentions (SN-284), under the Twitch pin or alone in its
+          // slot: one place, so a pin coming or going never remounts them.
+          // The "Older than chat history" card (z-16) stays over them.
+          after={<MentionPins rooms={mentionRooms} mixed={pinsMixed} onOpen={openPinnedMention} />}
         />
 
         {/* Staging area removed - using direct rendering with ResizeObserver */}
