@@ -141,8 +141,7 @@
     "mini player",
     "audio only",
     "background audio"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "player",
@@ -636,8 +635,7 @@
     "gradient",
     "solid",
     "edge"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
