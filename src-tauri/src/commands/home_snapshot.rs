@@ -98,6 +98,8 @@ pub async fn note_app_resumed() -> Result<bool, String> {
     crate::services::whisper_service::resume();
     // Sockets waiting out the account's socket limit try again too.
     crate::services::eventsub_budget::wake();
+    // Kick rooms ask at once whether their socket survived the time away.
+    crate::services::providers::kick::probe_sockets();
     Ok(home_snapshot::note_app_resumed().await)
 }
 

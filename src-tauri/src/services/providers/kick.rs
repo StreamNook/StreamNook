@@ -44,6 +44,29 @@ const PUSHER_FALLBACK_CLUSTER: &str = "us2";
 const PUSHER_APP_TTL: Duration = Duration::from_secs(30 * 60);
 // Pusher's idle activity timeout is ~120s; ping before then.
 const READ_TIMEOUT_SECS: u64 = 100;
+/// Pusher's pong deadline (the protocol's own 30 s, as pusher-js keeps it): a
+/// ping with nothing back in this long means the socket is dead. A socket that
+/// died while the phone slept, or across a Wi-Fi to cellular switch, still
+/// takes the ping's write, so without this a room sat connected and silent
+/// until TCP gave up, many minutes later (SN-287).
+const PONG_TIMEOUT_SECS: u64 = 30;
+
+/// How long the read loop waits for the next frame: the idle mark, or the pong
+/// deadline once a ping is out.
+fn read_wait(ping_out: bool) -> Duration {
+    Duration::from_secs(if ping_out { PONG_TIMEOUT_SECS } else { READ_TIMEOUT_SECS })
+}
+
+/// Wakes every Kick socket to ping at once (see `probe_sockets`).
+static PROBE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// The app came back to the front: every Kick room asks Pusher now whether its
+/// socket survived the time away, so a dead one is replaced within the pong
+/// deadline instead of after its idle mark (which a sleeping phone's clock
+/// does not advance).
+pub fn probe_sockets() {
+    PROBE.notify_waiters();
+}
 const RECONNECT_DELAY_SECS: u64 = 3;
 const RECONNECT_MAX_SECS: u64 = 60;
 /// A session that lived this long resets the backoff.
@@ -1203,14 +1226,30 @@ async fn connect_and_stream(chatroom_id: u64, channel_id: Option<u64>, channel_k
         }
     }
 
+    // A ping is out with nothing back yet (see PONG_TIMEOUT_SECS).
+    let mut ping_out = false;
     loop {
-        match timeout(Duration::from_secs(READ_TIMEOUT_SECS), read.next()).await {
-            // Idle: keep the connection alive with a Pusher ping.
-            Err(_) => {
+        let next = tokio::select! {
+            next = timeout(read_wait(ping_out), read.next()) => next.map_err(|_| ()),
+            _ = PROBE.notified(), if !ping_out => Err(()),
+        };
+        // Anything that arrives proves the socket alive, the pong included.
+        if next.is_ok() {
+            ping_out = false;
+        }
+        match next {
+            // Idle, or the app came back: a Pusher ping. Still unanswered at
+            // the pong deadline, the socket is dead and the caller reconnects.
+            Err(()) => {
+                if ping_out {
+                    log::warn!("[Kick] {} sent nothing back in {}s after a ping; reconnecting", channel_key, PONG_TIMEOUT_SECS);
+                    return Ok(());
+                }
                 let ping = json!({ "event": "pusher:ping", "data": {} });
                 if write.send(Message::text(ping.to_string())).await.is_err() {
                     return Ok(());
                 }
+                ping_out = true;
             }
             Ok(None) => return Ok(()),
             Ok(Some(Ok(Message::Text(txt)))) => {
@@ -2197,6 +2236,12 @@ fn push_text_run(segments: &mut Vec<MessageSegment>, plain: &mut String, text: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kick_gives_a_ping_thirty_seconds_to_be_answered() {
+        assert_eq!(read_wait(false), Duration::from_secs(100), "an idle socket pings before Pusher's 120 s");
+        assert_eq!(read_wait(true), Duration::from_secs(30), "a ping out waits Pusher's pong deadline");
+    }
 
     #[test]
     fn kick_reconnects_back_off_to_a_minute() {
