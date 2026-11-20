@@ -83,6 +83,9 @@ pub fn signed_in(user: &UserInfo) {
     if user.id.is_empty() || !DONE.lock().unwrap_or_else(|e| e.into_inner()).insert(user.id.clone()) {
         return;
     }
+    // Their Twitch Recap (hours, chats, points, subs gifted) soon after, on
+    // every client, instead of on the next daily tick.
+    crate::services::twitch_recap::signed_in();
     let user = user.clone();
     tauri::async_runtime::spawn(async move { run(user).await });
 }

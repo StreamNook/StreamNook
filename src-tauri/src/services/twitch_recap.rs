@@ -26,6 +26,17 @@
 //! So the service walks forward from the first year until Twitch rejects one,
 //! which picks up each new recap in December with no release.
 //!
+//! ## When
+//!
+//! A tick runs a while after launch, then daily, and again shortly after every
+//! confirmed sign-in (`signed_in`, from `member_signin`, which fires once per
+//! member per app session: at launch for a saved account and after a fresh
+//! sign-in). Without that, a member who signed in after the first tick waited
+//! a day, which on a phone means the next cold start, and then only if they
+//! stayed past the first delay: most one-visit phone members never got their
+//! Recap. The phones' first tick also comes sooner (`FIRST_DELAY`), since their
+//! web session read is one cheap call, not a hidden window.
+//!
 //! ## Cost
 //!
 //! One tick a day, and a tick does nothing unless a week has passed since the
@@ -37,9 +48,11 @@ use std::time::Duration;
 
 use chrono::Datelike;
 use log::{debug, warn};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::Manager;
+use tokio::sync::Notify;
 
 use crate::models::settings::AppState;
 use crate::rt::AppHandle;
@@ -49,11 +62,29 @@ use crate::services::auth_proxy;
 /// The first year Twitch publishes a recap for.
 const FIRST_YEAR: i32 = 2023;
 
-/// Delay before the first tick, clear of boot and of the version report.
+/// Delay before the first tick, clear of boot and of the version report. A
+/// desktop reads the web session through a short-lived hidden window, so it
+/// waits out boot; a phone reads one cookie jar, and many phone visits are
+/// shorter than three minutes.
+#[cfg(desktop)]
 const FIRST_DELAY: Duration = Duration::from_secs(3 * 60);
+#[cfg(not(desktop))]
+const FIRST_DELAY: Duration = Duration::from_secs(30);
 
 /// How often the loop wakes. Cheap: a tick with nothing to do reads one file.
 const TICK: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How soon a tick that failed (a Twitch or StreamNook request) tries again.
+const RETRY: Duration = Duration::from_secs(60 * 60);
+
+/// How long after a confirmed sign-in the tick runs, so the account registry
+/// and the web session (on an iPhone, the cookies the shell pushes after its
+/// sign-in sheet) have settled.
+const SIGNIN_SETTLE: Duration = Duration::from_secs(20);
+
+/// Wakes the loop after a sign-in. `notify_one` keeps a permit when the loop is
+/// busy or still in its first delay, so a sign-in is never missed.
+static SIGNED_IN: Lazy<Notify> = Lazy::new(Notify::new);
 
 /// How long a probe's answers are trusted before Twitch is asked again, which
 /// is how a newly published year, or a year that had no data, is picked up.
@@ -107,12 +138,25 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_DELAY).await;
         loop {
-            if let Err(e) = tick(&app).await {
-                warn!("[TwitchRecap] {e}");
+            let wait = match tick(&app).await {
+                Ok(()) => TICK,
+                Err(e) => {
+                    warn!("[TwitchRecap] {e}");
+                    RETRY
+                }
+            };
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = SIGNED_IN.notified() => tokio::time::sleep(SIGNIN_SETTLE).await,
             }
-            tokio::time::sleep(TICK).await;
         }
     });
+}
+
+/// A member's sign-in was confirmed: fetch and publish their Recap soon, not
+/// on the next daily tick. Cheap when nothing is due.
+pub fn signed_in() {
+    SIGNED_IN.notify_one();
 }
 
 async fn tick(app: &AppHandle) -> Result<(), String> {
@@ -329,6 +373,15 @@ fn write_cache(cache: &Cache) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sign-in that lands while the loop is mid-tick or still in its first
+    /// delay (nobody waiting yet) must still wake the next wait.
+    #[tokio::test]
+    async fn a_sign_in_before_the_loop_waits_is_kept() {
+        signed_in();
+        let woke = tokio::time::timeout(Duration::from_secs(1), SIGNED_IN.notified()).await;
+        assert!(woke.is_ok(), "the sign-in permit was lost");
+    }
 
     #[test]
     fn an_unpublished_year_stops_the_walk() {
