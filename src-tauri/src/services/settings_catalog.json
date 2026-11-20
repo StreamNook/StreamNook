@@ -1253,8 +1253,7 @@
     "keep mentions on top",
     "missed mentions",
     "pinned highlights"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -1268,8 +1267,7 @@
    "detail": "",
    "aliases": [
     "pin duration"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
