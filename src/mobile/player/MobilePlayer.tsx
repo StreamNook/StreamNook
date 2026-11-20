@@ -22,6 +22,7 @@ import { useAutomationDot } from '../../hooks/useAutomationStatus';
 import { AutomationDot } from '../../components/chat/AutomationDot';
 import { setLiveVideo, toggleLiveMute } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
+import { noteViewerPause } from './viewerPause';
 import { QualitySheet } from './QualitySheet';
 import PenroseMarch from '../../components/PenroseMarch';
 import { CollabAvatarStack } from '../../components/SharedViewers';
@@ -657,6 +658,7 @@ export const MobilePlayer: React.FC<{
       void video.play();
       setPaused(false);
     } else {
+      noteViewerPause();
       video.pause();
       setPaused(true);
     }

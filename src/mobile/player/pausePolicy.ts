@@ -12,8 +12,19 @@ export const STAND_DOWN_AFTER_MS = 10 * 60_000;
 // catches up on the first wake.
 const STAND_DOWN_CHECK_MS = 60_000;
 
-export function resyncOnResume(pausedAt: number | null, now: number): boolean {
-  return pausedAt !== null && now - pausedAt >= RESYNC_AFTER_PAUSE_MS;
+/** A pause the viewer did not choose (a phone call or another app taking the
+ *  sound, leaving the app with Background play off, a clip played over the
+ *  stream) lasting this long comes back at the live edge. Picking up where it
+ *  stopped left the stream that far behind for good: the governor closes at
+ *  most a few seconds a minute, and past its rewind mark not at all (SN-287).
+ *  Shorter, the loader never stopped and the governor closes the gap. */
+export const INTERRUPTION_RESYNC_MS = 4_000;
+
+/** Whether playing again starts over at the live edge. `chosen`: the viewer
+ *  paused it (the player's button, the media card, a headset), which keeps
+ *  their place until the relay parks. */
+export function resyncOnResume(pausedAt: number | null, now: number, chosen = true): boolean {
+  return pausedAt !== null && now - pausedAt >= (chosen ? RESYNC_AFTER_PAUSE_MS : INTERRUPTION_RESYNC_MS);
 }
 
 export type SurfaceLossAction = 'none' | 'downshift' | 'pause';

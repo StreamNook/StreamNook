@@ -40,6 +40,7 @@ import { createStallReporter, reportSegment } from './linkAdapt';
 import { SEAM_MAX_SECS, learnedLLCushion, rememberLLCushion } from '../../utils/llCushion';
 import { streamProvider } from '../../utils/streamProvider';
 import { resyncOnResume } from './pausePolicy';
+import { takeViewerPause } from './viewerPause';
 import { isMainParked } from '../appPresence';
 
 // The earning gate (drops progress, channel points, watch time) is Rust's
@@ -115,6 +116,9 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     // When the viewer paused (null while playing). Past RESYNC_AFTER_PAUSE_MS
     // the core has parked the relay, so play starts over at the live edge.
     let pausedAt: number | null = null;
+    // Whether the viewer chose that pause. A call or another app taking the
+    // sound pauses it too, and that one comes back at the live edge sooner.
+    let pauseChosen = true;
     // The route the current player was built on, whether it already fell back
     // from low latency, and how many rebuilds this URL has had since it last
     // played. All per URL: a new URL starts the count again.
@@ -497,13 +501,18 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       const onPlayIntent = () => {
         if (!live()) return;
         // Paused long enough that the core has parked the relay and the buffer
-        // is far behind live: start over at the live edge through the same
+        // is far behind live, or interrupted (a call, another app's sound) for
+        // more than a moment: start over at the live edge through the same
         // rebuild a failed load takes, not a stale playhead. Same URL, so an
         // audio-only stream stays audio-only. The core's own park flag counts
         // too: its timer and this one start a moment apart.
-        if (!vodStart && !frozen && (resyncOnResume(pausedAt, Date.now()) || isMainParked())) {
+        if (!vodStart && !frozen && (resyncOnResume(pausedAt, Date.now(), pauseChosen) || isMainParked())) {
+          Logger.info(
+            `[MobilePlayer] ${pauseChosen ? 'paused past the live window' : 'interrupted'} for ${Math.round(
+              (Date.now() - (pausedAt ?? Date.now())) / 1000,
+            )}s; rebuilding at the live edge`,
+          );
           pausedAt = null;
-          Logger.info('[MobilePlayer] paused past the live window; rebuilding at the live edge');
           teardownPlayer();
           setState('loading');
           build(lowLatency);
@@ -553,7 +562,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       };
       const onPauseOrEnd = () => {
         if (!live()) return;
-        if (video.paused && !video.ended && !frozen && pausedAt === null) pausedAt = Date.now();
+        if (video.paused && !video.ended && !frozen && pausedAt === null) {
+          pausedAt = Date.now();
+          pauseChosen = takeViewerPause(pausedAt);
+        }
         stalls.cancel();
         endStallWatch();
         // Stop pulling segments once the pause outlives the grace window. See

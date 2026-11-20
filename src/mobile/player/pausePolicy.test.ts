@@ -1,11 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { createStandDownWatch, resyncOnResume, surfaceLossAction } from './pausePolicy';
+import { noteViewerPause, takeViewerPause } from './viewerPause';
 
 describe('pausePolicy', () => {
   it('resyncs only after 30 s paused', () => {
     expect(resyncOnResume(null, 1e9)).toBe(false);
     expect(resyncOnResume(0, 29_999)).toBe(false);
     expect(resyncOnResume(0, 30_000)).toBe(true);
+  });
+
+  it('an interruption (a call, another app sounding) comes back at the live edge after 4 s (SN-287)', () => {
+    expect(resyncOnResume(0, 3_999, false)).toBe(false);
+    expect(resyncOnResume(0, 4_000, false)).toBe(true);
+    expect(resyncOnResume(0, 20_000, false)).toBe(true);
+    // The viewer's own pause keeps their place until the relay parks.
+    expect(resyncOnResume(0, 20_000, true)).toBe(false);
+    expect(resyncOnResume(null, 1e9, false)).toBe(false);
+  });
+
+  it('only a pause noted just before it counts as the viewer chose it', () => {
+    expect(takeViewerPause(1_000)).toBe(false);
+    noteViewerPause(1_000);
+    expect(takeViewerPause(1_200)).toBe(true);
+    // Reading spends the note: the next pause (a call) is not the viewer's.
+    expect(takeViewerPause(5_000)).toBe(false);
+    noteViewerPause(1_000);
+    expect(takeViewerPause(2_500)).toBe(false);
   });
 
   it('surface loss: PiP or paused does nothing; background play decides', () => {

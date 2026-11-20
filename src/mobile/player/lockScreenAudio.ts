@@ -16,6 +16,7 @@
 // notification can never show "paused" over a stream that is still playing.
 import { isInPip, mediaSessionPark, mediaSessionStart, mediaSessionStop } from '../nativeBridge';
 import { createStandDownWatch, surfaceLossAction } from './pausePolicy';
+import { noteViewerPause } from './viewerPause';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 
@@ -210,6 +211,8 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
       // must not throw into the event handler.
       void v.play().catch((err) => Logger.warn('[lockScreenAudio] play rejected', err));
     } else if (cmd === 'pause') {
+      // The card or a headset: the viewer's own pause, which keeps their place.
+      noteViewerPause();
       v.pause();
     } else if (cmd === 'stop') {
       // "Stop" from the card, a headset or the task being removed means done
