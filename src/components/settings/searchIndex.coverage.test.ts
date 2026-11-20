@@ -56,7 +56,7 @@ const UNINDEXED: Record<
     titles: ['Vibration', 'Keep screen on', 'Inbox button', 'Only after a colon'],
     nested: [{ title: 'Matching', parent: 'Chatter names' }],
   },
-  Player: { sections: ['Discover'], titles: ['Background play', 'Zoom to fill', 'Brightness and volume swipes'] },
+  Player: { sections: ['Discover'], titles: ['Picture-in-picture', 'Background play', 'Zoom to fill', 'Brightness and volume swipes'] },
   Support: { sections: ['Devices'], titles: ['Log export'] },
   Notifications: { titles: ['Gift sub preview', 'Reward preview'] },
   Moderation: { sections: ['Moderating Messages'] },
