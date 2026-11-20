@@ -44,6 +44,17 @@ function lastHeight(): number {
   }
 }
 
+/** A day still to go: a soft white ring on dark themes; the text color on
+ *  light ones, where white vanishes into the card (about 1.1:1) and a line
+ *  two days into five would read as two of two. */
+const DAY_RING =
+  'ring-white/[0.35] [html[data-theme-tone=light]_&]:ring-[color:color-mix(in_srgb,var(--color-text-primary)_60%,transparent)]';
+
+/** Success green for the check and the Claim word: the theme's own on dark
+ *  themes, darker on light ones, where the plain green is about 2.5:1. */
+const SUCCESS_INK =
+  'text-success [html[data-theme-tone=light]_&]:text-[color-mix(in_srgb,var(--color-success)_60%,black)]';
+
 /** Days done as filled dots, the day under way (on the equipped line) as an
  *  accent ring, the rest as rings. Past five days, the count instead. */
 const DayDots = ({ done, total, today }: { done: number; total: number; today: boolean }) => {
@@ -64,7 +75,7 @@ const DayDots = ({ done, total, today }: { done: number; total: number; today: b
               ? 'bg-accent'
               : today && i === done
                 ? 'ring-1 ring-inset ring-accent'
-                : 'ring-1 ring-inset ring-white/[0.35]'
+                : `ring-1 ring-inset ${DAY_RING}`
           }`}
         />
       ))}
@@ -129,12 +140,12 @@ const LaneRow = ({
             onClick={() => onClaim(target.group_id, target.instance_id!)}
             className="pointer-events-auto shrink-0 -my-2 py-2 px-1 active:opacity-70 transition-opacity"
           >
-            <span className="glaze-inset glaze-chip bg-white/[0.10] inline-flex items-center h-[24px] px-2.5 text-[11.5px] font-medium text-success">
+            <span className={`glaze-inset glaze-chip bg-white/[0.10] inline-flex items-center h-[24px] px-2.5 text-[11.5px] font-medium ${SUCCESS_INK}`}>
               {target.claim_label}
             </span>
           </button>
         ) : done ? (
-          <Check size={14} className="shrink-0 self-start mt-[3px] text-success" aria-hidden />
+          <Check size={14} className={`shrink-0 self-start mt-[3px] ${SUCCESS_INK}`} aria-hidden />
         ) : showDays ? (
           <span className="shrink-0 self-start mt-[6px]">
             <DayDots done={target.days_done} total={target.total_days} today={equipped} />
