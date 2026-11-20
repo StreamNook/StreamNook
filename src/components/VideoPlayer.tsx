@@ -3887,7 +3887,7 @@ const VideoPlayer = () => {
               if (v) v.currentTime = skipMutedTarget(activeMute, v.duration);
             }}
             className="flex items-center gap-1 self-stretch rounded-r border-l border-white/15 px-2 font-semibold text-white/90 transition-colors hover:bg-white/10 hover:text-white"
-            title="Skip to where the sound comes back"
+            aria-label="Skip to where the sound comes back"
           >
             Skip
             <SkipForward size={11} />
