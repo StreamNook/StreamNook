@@ -535,6 +535,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
+    title: 'Redemption style',
+    description: 'How channel points messages, like Highlight My Message, stand out: a banded wash (Gradient), one even tint (Solid), or a bar down the left side (Edge). Highlighted message style.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Events',
+    sectionId: 'settings-section-chat-events',
     title: 'Redemption color',
     description: 'The tint behind channel points messages, like Highlight My Message. Highlighted message color, redeem color, channel points color.'
   },

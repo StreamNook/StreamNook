@@ -1565,6 +1565,10 @@ export interface ChatEventSettings {
   // Hex tint of channel points rows (Highlight My Message, rewards that post
   // to chat); empty keeps the theme's cyan and blue.
   redemption_color?: string;
+  // How channel points rows wear that tint (SN-281): 'gradient' (default, the
+  // banded wash), 'solid' (one even tint), 'edge' (a bar down the left side
+  // over a faint tint).
+  redemption_style?: 'gradient' | 'solid' | 'edge';
   // Show Super Chat amounts converted to this currency code; empty = as sent.
   superchat_currency?: string;
   // Event categories to leave out, keyed "provider:category" (e.g. "twitch:gift").

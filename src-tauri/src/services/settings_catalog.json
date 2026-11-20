@@ -623,6 +623,25 @@
   {
    "page": "chat",
    "section": "Chat Events",
+   "title": "Redemption style",
+   "paths": [
+    "chat_events.redemption_style"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "How channel points messages, like Highlight My Message, stand out: a banded wash, one even tint, or a bar down the left side.",
+   "aliases": [
+    "highlighted message style",
+    "highlight my message",
+    "gradient",
+    "solid",
+    "edge"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
    "title": "Redemption color",
    "paths": [
     "chat_events.redemption_color"

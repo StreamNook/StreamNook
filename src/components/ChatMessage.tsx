@@ -13,7 +13,8 @@ import { mentionHoldBackground } from './chat/mentionHold';
 import { withEmoteWord } from './chat/emoteWords';
 import { deletedBodyStyle, deletedRowDimmed, DEFAULT_DELETED_STYLE } from './chat/deletedMessage';
 import { ModerationTag } from './chat/ModerationTag';
-import { eventCardClass as eventCardClassFor, eventCardStyle as eventCardStyleFor } from './chat/eventCard';
+import { eventCardClass as eventCardClassFor, eventCardStyle as eventCardStyleFor, redemptionRowClass, redemptionRowStyle } from './chat/eventCard';
+import { RedemptionLabel } from './chat/RedemptionLabel';
 import { mentionBoxClass, mentionBoxStyle, mentionLook, mentionTextStyle } from './chat/mentionStyle';
 
 // Emote previews open almost at once: a quick pass over an emote should still
@@ -3533,17 +3534,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   return (
     <div
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
-        }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
+        }${ftClass} ${isRedemption ? redemptionRowClass(chatEvents) : ''
         } ${isFromSharedChat && !ownLeftBorder ? 'sn-shared-row' : ''
         } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''}`}
       style={{
         ...messageStyle,
         // A partner row's channel color (sn-shared-row's edge and wash).
         ...(isFromSharedChat && sharedSource ? ({ '--sn-src': sharedSource.color } as React.CSSProperties) : {}),
-        // The viewer's own tint for channel points rows (highlight-message-gradient).
-        ...(isRedemption && chatEvents?.redemption_color
-          ? ({ '--sn-redeem': chatEvents.redemption_color } as React.CSSProperties)
-          : {}),
+        // The viewer's own tint for channel points rows (redemptionRowClass).
+        ...(isRedemption ? redemptionRowStyle(chatEvents) : {}),
         ...(mentionHoldBg ?? builtInEventBg ? { backgroundImage: mentionHoldBg ?? builtInEventBg } : {}),
         ...(ftRing ? ({ '--sn-ft-color': builtInEventColor } as React.CSSProperties) : {}),
         borderLeftColor: (isMentioned || isReplyToMe)
@@ -3630,14 +3629,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       )}
       {/* Channel points redemption indicator (highlight, gigantify, animate, skip-subs-mode, custom reward) */}
       {redemptionLabel && !isRewardEventRow && (
-        <div className="flex min-w-0 items-center justify-end gap-1">
-          <svg className="w-3 h-3 flex-shrink-0 text-highlight-cyan opacity-60" viewBox="0 0 20 20" fill="currentColor">
-            <path d="M10 6a4 4 0 014 4h-2a2 2 0 00-2-2V6z" />
-            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-2 0a6 6 0 11-12 0 6 6 0 0112 0z" clipRule="evenodd" />
-          </svg>
-          <span className="min-w-0 truncate text-xs text-highlight-cyan font-normal opacity-60">{redemptionLabel}</span>
+        <RedemptionLabel label={redemptionLabel}>
           {redeemedTitle && redeemedCost && (
-            <span className="inline-flex flex-shrink-0 items-center gap-0.5 text-xs text-highlight-cyan/80 font-medium tabular-nums">
+            <span className="sn-redeem-ink inline-flex flex-shrink-0 items-center gap-0.5 text-xs font-medium tabular-nums opacity-80">
               {redemptionPointsIcon ? (
                 <img
                   src={redemptionPointsIcon}
@@ -3646,12 +3640,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   onError={(e) => { e.currentTarget.style.display = 'none'; }}
                 />
               ) : (
-                <ChannelPointsIcon size={12} className="text-highlight-cyan/80" />
+                <ChannelPointsIcon size={12} />
               )}
               {Number(redeemedCost).toLocaleString()}
             </span>
           )}
-        </div>
+        </RedemptionLabel>
       )}
       {/* Reply indicator */}
       {parsed.replyInfo && replyStyle === 'full' && (

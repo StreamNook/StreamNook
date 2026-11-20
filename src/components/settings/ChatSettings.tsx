@@ -96,7 +96,7 @@ import { getUserCosmetics, computePaintStyle } from '../../services/seventvServi
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
 import type { EmoteWordsLook } from '../chat/emoteWords';
-import { BadgeFoldPreview, DeletedMessagePreview, EmoteWordsPreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
+import { BadgeFoldPreview, DeletedMessagePreview, EmoteWordsPreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RedemptionRowPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
 import { DropsChatBarView, PREVIEW_LINE as DROPS_PREVIEW_LINE } from '../chat/DropsChatBar';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
@@ -530,6 +530,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const mentionSoundOptions = useSoundOptions({ noneLabel: 'No sound' });
   const soundOptions = useSoundOptions();
   const [eventStyleHover, setEventStyleHover] = useState<'cards' | 'outline' | 'plain' | null>(null);
+  const [redemptionStyleHover, setRedemptionStyleHover] = useState<'gradient' | 'solid' | 'edge' | null>(null);
   const [roomModesStyleHover, setRoomModesStyleHover] = useState<'chip' | 'prompt' | null>(null);
   const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
   const [pictureAnimationHover, setPictureAnimationHover] = useState<ProfilePictureAnimation | null>(null);
@@ -1247,6 +1248,31 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
+        <SettingsRow
+          title="Redemption style"
+          onReset={resetFor(['chat_events.redemption_style', 'gradient'])}
+          description="How channel points messages, like Highlight My Message, stand out: a banded wash, one even tint, or a bar down the left side."
+          help="Redemption color sets the tint for all three."
+        >
+          <div className="space-y-3">
+            <SegmentedSelect<'gradient' | 'solid' | 'edge'>
+              fullWidth={IS_MOBILE}
+              value={chatEvents.redemption_style ?? 'gradient'}
+              onChange={(redemption_style) => setEvents({ redemption_style })}
+              onPreview={setRedemptionStyleHover}
+              options={[
+                { value: 'gradient', label: 'Gradient' },
+                { value: 'solid', label: 'Solid' },
+                { value: 'edge', label: 'Edge' },
+              ]}
+            />
+            <RedemptionRowPreview
+              design={cd}
+              events={{ ...chatEvents, redemption_style: redemptionStyleHover ?? chatEvents.redemption_style }}
+            />
+          </div>
+        </SettingsRow>
 
         <SettingsRow
           title="Redemption color"

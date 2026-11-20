@@ -4460,6 +4460,54 @@ html[data-motion="reduced"] .sub-progress-fill {
   background-size: 100% 100%;
 }
 
+/* Redemption style Solid and Edge (SN-281). Both paint with background-image
+   (a flat one-stop gradient), as the banded style does, so the row's
+   hover:bg-glass background-color never fights them. Edge draws its bar as an
+   inset shadow: the row's inline left border belongs to mentions and
+   highlight rules. */
+.highlight-message-solid,
+.highlight-message-edge {
+  --sn-redeem-a: var(--sn-redeem, var(--color-highlight-cyan));
+  background-color: var(--color-background);
+}
+
+/* The "Redeemed ..." line and its cost wear the row's Redemption color, so a
+   pink row is not labeled in cyan. */
+.sn-redeem-ink {
+  color: var(--sn-redeem, var(--color-highlight-cyan));
+}
+
+.highlight-message-solid {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--sn-redeem-a) 15%, transparent),
+    color-mix(in srgb, var(--sn-redeem-a) 15%, transparent)
+  );
+}
+
+.highlight-message-solid:hover {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--sn-redeem-a) 22%, transparent),
+    color-mix(in srgb, var(--sn-redeem-a) 22%, transparent)
+  );
+}
+
+.highlight-message-edge {
+  box-shadow: inset 3px 0 0 var(--sn-redeem-a);
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sn-redeem-a) 10%, transparent),
+    transparent 60%
+  );
+}
+
+.highlight-message-edge:hover {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sn-redeem-a) 16%, transparent),
+    transparent 70%
+  );
+}
+
 /* Custom ultra-blur for floating header */
 /* Parameterized so the radius can be A/B'd live (devtools: set
    --sn-ultra-blur on :root). The chat header carries this class OVER the

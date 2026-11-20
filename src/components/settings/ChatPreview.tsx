@@ -15,7 +15,8 @@ import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/Styl
 import { deletedBodyStyle, deletedRowDimmed, type DeletedMessageStyle } from '../chat/deletedMessage';
 import { ModerationTag } from '../chat/ModerationTag';
 import { INLINE_TIME_STYLE, OWN_LINE_TIME_STYLE, timestampOnOwnLine } from '../chat/chatTimestamp';
-import { eventCardClass, eventCardStyle } from '../chat/eventCard';
+import { eventCardClass, eventCardStyle, redemptionRowClass, redemptionRowStyle } from '../chat/eventCard';
+import { RedemptionLabel } from '../chat/RedemptionLabel';
 import type { ModerationContext, RoomModeView } from '../../stores/chatConnectionStore';
 import { RoomModeIndicator } from '../chat/RoomModeIndicator';
 import { mentionHoldBackground } from '../chat/mentionHold';
@@ -630,6 +631,41 @@ export const EventRowPreview = ({
     </SettingPreview>
   );
 };
+
+const REDEMPTION_CAPTIONS: Record<NonNullable<ChatEventSettings['redemption_style']>, string> = {
+  gradient: 'a highlighted message, in a banded wash',
+  solid: 'a highlighted message, in one even tint',
+  edge: 'a highlighted message, with a bar down its left side',
+};
+
+/** A Highlight My Message row between ordinary lines, dressed by the same
+ *  class and tint the chat row uses (chat/eventCard redemptionRow*). */
+export const RedemptionRowPreview = ({
+  design,
+  events,
+}: {
+  design: PreviewDesign;
+  events: ChatEventSettings;
+}) => (
+  <SettingPreview caption={REDEMPTION_CAPTIONS[events.redemption_style ?? 'gradient'] ?? REDEMPTION_CAPTIONS.gradient}>
+    <PreviewChat design={design}>
+      <Row>
+        <PreviewLine design={design} who={PIXELFOX} text="that clutch was unreal" minutesAgo={2} first />
+      </Row>
+      <div className="chat-message-row">
+        <div className={redemptionRowClass(events)} style={redemptionRowStyle(events)}>
+          <div className="px-3 pt-1">
+            <RedemptionLabel label="Redeemed Highlight My Message" />
+          </div>
+          <PreviewLine design={design} who={QUIETSTORM} text="GG chat, best stream all week" minutesAgo={1} first />
+        </div>
+      </div>
+      <Row>
+        <PreviewLine design={design} who={LOOTGOBLIN} text="welcome to the club" minutesAgo={1} />
+      </Row>
+    </PreviewChat>
+  </SettingPreview>
+);
 
 /** A mention drawn the way chat draws it (chat/mentionStyle), in a plain line
  *  and inside a /me line, where the slant setting shows. */
