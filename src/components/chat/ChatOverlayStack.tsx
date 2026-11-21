@@ -137,12 +137,16 @@ export function StackCard({
   kind,
   control,
   measure,
+  scrollOpen = false,
   children,
   className = '',
 }: {
   kind: StackKind;
   control: StackCardControl;
   measure?: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
+  /** An open card is held to the height Rust gave it and scrolls inside it (its
+   *  natural height is what the stack's cache keeps, not the capped one). */
+  scrollOpen?: boolean;
   children: ReactNode;
   className?: string;
 }) {
@@ -153,19 +157,23 @@ export function StackCard({
     const el = ref.current;
     if (!el || !measure || folded || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      const h = Math.round(el.getBoundingClientRect().height);
+      // Capped, the box is shorter than its content: the content is what it measures.
+      const h = Math.round(Math.max(el.getBoundingClientRect().height, scrollOpen ? el.scrollHeight : 0));
       if (h > 0) measure(kind, form, h);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [kind, form, folded, measure]);
+  }, [kind, form, folded, measure, scrollOpen]);
+  const capped = scrollOpen && control.form === 'open' && control.height > 0;
   return (
     <div
       ref={ref}
       data-stack-card={kind}
       data-form={control.form ?? ''}
-      className={`${folded ? 'hidden' : 'flex'} min-w-0 shrink-0 flex-col ${className}`}
-      style={{ order: control.order }}
+      className={`${folded ? 'hidden' : 'flex'} min-w-0 shrink-0 flex-col ${
+        capped ? 'overflow-y-auto overscroll-contain' : ''
+      } ${className}`}
+      style={{ order: control.order, maxHeight: capped ? control.height : undefined }}
     >
       {children}
     </div>

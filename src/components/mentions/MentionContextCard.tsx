@@ -123,7 +123,7 @@ export function MentionContextCard({
   );
   if (!stack) return card;
   return (
-    <StackCard kind="mention_context" control={stack} measure={measure}>
+    <StackCard kind="mention_context" control={stack} measure={measure} scrollOpen>
       {card}
     </StackCard>
   );

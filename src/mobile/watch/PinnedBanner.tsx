@@ -215,7 +215,7 @@ export const PinnedBanner: React.FC<Props> = ({
     </div>
   );
   return stack ? (
-    <StackCard kind="channel_pin" control={stack} measure={measure}>
+    <StackCard kind="channel_pin" control={stack} measure={measure} scrollOpen>
       {box}
     </StackCard>
   ) : (

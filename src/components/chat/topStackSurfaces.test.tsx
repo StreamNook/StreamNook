@@ -190,3 +190,25 @@ describe('the desktop chat widget', () => {
     expect(win).toContain('surfaceId={`pane:${entryKey(entry)}`}');
   });
 });
+
+describe('a card that opens in the stack', () => {
+  it('is held to the height Rust gave it and scrolls inside it, only while open', async () => {
+    const { StackCard } = await import('./ChatOverlayStack');
+    const draw = (c: StackCardControl) =>
+      act(() =>
+        root.render(
+          <StackCard kind="channel_pin" control={c} scrollOpen>
+            <div />
+          </StackCard>,
+        ),
+      );
+    draw(control({ form: 'open', open: true, height: 120 }));
+    const open = host.querySelector<HTMLElement>('[data-stack-card="channel_pin"]')!;
+    expect(open.style.maxHeight).toBe('120px');
+    expect(open.className).toContain('overflow-y-auto');
+    draw(control({ form: 'strip', open: false, height: 36 }));
+    const strip = host.querySelector<HTMLElement>('[data-stack-card="channel_pin"]')!;
+    expect(strip.style.maxHeight).toBe('');
+    expect(strip.className).not.toContain('overflow-y-auto');
+  });
+});
