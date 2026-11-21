@@ -3,8 +3,7 @@
 // widget in the pinned message's slot, so the pins and the channel's pin share
 // one place.
 
-import { useCallback, useEffect, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { memo, useCallback, useEffect, useMemo } from 'react';
 import { MentionPinsBlock, type PinsForm } from './MentionPins';
 import { pinsFormOf, pinsMeasureForm } from './pinsForm';
 import { StackCard } from '../chat/ChatOverlayStack';
@@ -88,22 +87,16 @@ export function openPinnedProfile(pin: MentionPin, e: React.MouseEvent): void {
   }).catch((err) => Logger.debug('[MentionPins] profile card failed:', err));
 }
 
-export function DesktopPins(props: DesktopPinsProps) {
+function DesktopPinsView(props: DesktopPinsProps) {
   const { shown, reportVisible, pins } = useDesktopPins(props);
-  const { onOpenOwn, onPins } = props;
+  const { onPins } = props;
   const openOther = useCallback((pin: MentionPin) => {
     // The inbox reads it when its row is opened, not here.
     requestMentionFocus({ id: pin.entry.id, room: pin.entry.room });
   }, []);
-  const openOwn = useCallback(
-    (pin: MentionPin) => {
-      invoke('open_mention', { id: pin.entry.id }).catch((err) => {
-        Logger.warn('[MentionPins] open_mention failed:', err);
-      });
-      onOpenOwn(pin);
-    },
-    [onOpenOwn],
-  );
+  // The host's `onOpenOwn` tells Rust the mention was opened (`open_mention`) and
+  // scrolls to it: asking here too would be a second call for one tap.
+  const openOwn = props.onOpenOwn;
   useEffect(() => {
     onPins?.(pins);
   }, [pins, onPins]);
@@ -163,6 +156,9 @@ export function DesktopPins(props: DesktopPinsProps) {
     />
   );
 }
+
+/** Memoized: a chat that takes a message every few frames re-renders its host, never the pins. */
+export const DesktopPins = memo(DesktopPinsView);
 
 export { roomRef };
 export default DesktopPins;

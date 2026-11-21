@@ -25,6 +25,10 @@ export function startPinPresence(opts: { surfaces?: boolean } = {}): void {
   started = true;
   const withSurfaces = opts.surfaces !== false;
   let unlisten: (() => void) | null = null;
+  // Each switch of Pin mentions takes a new generation: a `listen` that was still
+  // pending when the setting flipped again lets go of its listener instead of
+  // leaving it beside the newer one (or past the off).
+  let generation = 0;
 
   const resend = () => pinSurfaces.resend();
   const onVisibility = () => {
@@ -35,11 +39,13 @@ export function startPinPresence(opts: { surfaces?: boolean } = {}): void {
     setPinInputEnabled(on);
     if (!withSurfaces) return;
     pinSurfaces.setEnabled(on);
+    generation += 1;
     if (on) {
+      const mine = generation;
       window.addEventListener('focus', resend);
       document.addEventListener('visibilitychange', onVisibility);
       void listen(MENTION_PINS_CHANGED_EVENT, resend).then((off) => {
-        if (!pinSurfaces.isEnabled()) off();
+        if (mine !== generation || !pinSurfaces.isEnabled()) off();
         else unlisten = off;
       });
     } else {

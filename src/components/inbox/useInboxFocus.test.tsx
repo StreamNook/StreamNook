@@ -54,7 +54,7 @@ let host: HTMLElement;
 let root: Root;
 const seen: { focused: string | null; asked: number; waiting: boolean } = { focused: null, asked: 0, waiting: false };
 
-function Probe({ rows, hasMore }: { rows: InboxItem[]; hasMore: boolean }) {
+function Probe({ rows, hasMore, answer }: { rows: InboxItem[]; hasMore: boolean; answer?: () => Promise<boolean> }) {
   const ref = useRef<HTMLDivElement>(null);
   const focus = useMentionFocus();
   seen.waiting = focus !== null;
@@ -63,6 +63,7 @@ function Probe({ rows, hasMore }: { rows: InboxItem[]; hasMore: boolean }) {
     hasMore,
     loadOlder: () => {
       seen.asked += 1;
+      return answer?.();
     },
     loaded: true,
     container: ref,
@@ -137,6 +138,43 @@ describe('useInboxFocus', () => {
     expect(addToast).toHaveBeenCalledWith(FOCUS_MISSING_WORDS, 'info');
     expect(seen.focused).toBeNull();
     expect(seen.waiting).toBe(false);
+  });
+
+  it.each([
+    ['a page that failed', () => Promise.resolve(false)],
+    ['a page that threw', () => Promise.reject(new Error('offline'))],
+  ] as Array<[string, () => Promise<boolean>]>)('says so and lets the request go after %s', async (_name, answer) => {
+    addToast.mockClear();
+    const rows = [mentionRow('a')];
+    act(() => root.render(<Probe rows={rows} hasMore answer={answer} />));
+    act(() => requestMentionFocus({ id: 'deep', room: 'xqc' }));
+    expect(seen.asked).toBe(1);
+    expect(seen.waiting).toBe(true);
+    // The list never changes again, so nothing would ask a second time.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(addToast).toHaveBeenCalledTimes(1);
+    expect(addToast).toHaveBeenCalledWith(FOCUS_MISSING_WORDS, 'info');
+    expect(seen.waiting).toBe(false);
+  });
+
+  it('a page that landed and held the entry says nothing', async () => {
+    addToast.mockClear();
+    let rows = [mentionRow('a')];
+    const view = () => <Probe rows={rows} hasMore answer={() => Promise.resolve(false)} />;
+    act(() => root.render(view()));
+    act(() => requestMentionFocus({ id: 'deep', room: 'xqc' }));
+    // The entry arrives before the (late) answer does.
+    rows = [...rows, mentionRow('deep')];
+    act(() => root.render(view()));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(seen.focused).toBe('row-deep');
+    expect(addToast).not.toHaveBeenCalled();
   });
 
   it('a runaway list is stopped by the safety limit, with the same word', () => {

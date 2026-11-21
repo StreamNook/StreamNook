@@ -8,7 +8,7 @@
 // This hook only gathers what Rust needs (which cards have something to show,
 // what the viewer opened and folded, the column's height) and hands each card
 // its slot. The cards stay self-fetching: they report themselves present.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
@@ -278,7 +278,9 @@ export function useChatTopStack(
   }, [surface, phone]);
   const openedRef = useRef(opened);
   const foldedRef = useRef(folded);
-  useEffect(() => {
+  // Before any child's effect of the same commit: a card that toggles itself as it is
+  // placed (the mention context card) reads the layout that placed it, not the one before.
+  useLayoutEffect(() => {
     layoutRef.current = layout;
     openedRef.current = opened;
     foldedRef.current = folded;

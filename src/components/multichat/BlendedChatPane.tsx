@@ -56,6 +56,9 @@ const noop = () => {};
 // but it caps the machine-speed scroll/auto-scroll oscillation a fast chat produces.
 // `force` transitions (Resume button, reply-jump) bypass it.
 const PAUSE_SETTLE_MS = 120;
+/** The list's own top room (what it reserved before the stack floated over it): the stack's
+ *  drawn bottom raises it, an empty stack never takes it away. */
+const BLENDED_TOP_INSET_PX = 40;
 
 // The provider/key helpers and the send router are shared with the main chat
 // panel (utils/sendToSource), so both surfaces route a reply the same way.
@@ -323,6 +326,7 @@ export function BlendedChatPane({
     (entry: MentionEntry | null) => setPinCardFor(entry ? { rooms: pinRooms, entry } : null),
     [pinRooms],
   );
+  const dismissPinCard = useCallback(() => setPinCard(null), [setPinCard]);
   const openPinnedMention = useCallback(
     (pin: MentionPin) => {
       const { entry } = pin;
@@ -627,7 +631,7 @@ export function BlendedChatPane({
           emotes={null}
           getMessageId={getMessageId}
           showSource={channels.length > 1}
-          headerInset={stackBottom}
+          headerInset={Math.max(stackBottom, BLENDED_TOP_INSET_PX)}
           scrollToBottomRef={listScrollToBottomRef}
         />
         {/* The top-of-chat stack, over the feed: a strip per hype train, the
@@ -650,7 +654,7 @@ export function BlendedChatPane({
           {pinCard && (
             <MentionContextCard
               entry={pinCard}
-              onDismiss={() => setPinCard(null)}
+              onDismiss={dismissPinCard}
               stack={topStack.control.mention_context}
               measure={topStack.measure}
             />

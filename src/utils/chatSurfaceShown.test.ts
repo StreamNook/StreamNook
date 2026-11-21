@@ -17,6 +17,7 @@ const desktop = (over: Partial<DesktopShownInputs> = {}): DesktopShownInputs => 
   chatViewActive: true,
   searchOpen: false,
   coverOpen: false,
+  pageOverlayOpen: false,
   ...over,
 });
 
@@ -46,6 +47,7 @@ describe('chatSurfaceShown (desktop)', () => {
     ['the chat shows another view (Viewers, Mod Room)', { chatViewActive: false }],
     ['chat search is open', { searchOpen: true }],
     ['the drops drawer or emote picker is over the stack', { coverOpen: true }],
+    ['Drops, Emote Sets or the Marketplace covers the window', { pageOverlayOpen: true }],
   ] as Array<[string, Partial<DesktopShownInputs>]>)('is false when %s', (_name, over) => {
     expect(chatSurfaceShown(desktop(over))).toBe(false);
   });

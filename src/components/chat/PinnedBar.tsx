@@ -359,7 +359,7 @@ export function PinnedBar({
   // A card of the stack: it floats with the others and Rust says where.
   if (stack) {
     return (
-      <StackCard kind="channel_pin" control={stack} measure={measure} scrollOpen className={hidden ? 'hidden' : ''}>
+      <StackCard kind="channel_pin" control={stack} measure={measure} scrollOpen className={`pointer-events-none items-center ${hidden ? 'hidden' : ''}`}>
         {body}
       </StackCard>
     );

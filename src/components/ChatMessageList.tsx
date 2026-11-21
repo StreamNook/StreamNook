@@ -19,7 +19,7 @@ import { armThaw, touchPauseIntent } from './chat/chatHold';
 import { lineButtons, type LineButton } from './chat/modLine';
 import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons } from './chat/lineArt';
 import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
-import { spacerScrollDelta, supportsOverflowAnchor } from './chat/stackSpacer';
+import { spacerScrollTop, supportsOverflowAnchor } from './chat/stackSpacer';
 import { IS_MAC, IS_MOBILE } from '../utils/platform';
 import { releaseRowImagesOnUnmount } from '../utils/releaseImages';
 
@@ -423,9 +423,18 @@ const ChatMessageList = memo(function ChatMessageList({
   useLayoutEffect(() => {
     const prev = spacerRef.current;
     spacerRef.current = topSpace;
-    const delta = spacerScrollDelta(prev, topSpace, supportsOverflowAnchor());
     const el = containerRef.current;
-    if (delta !== 0 && el) el.scrollTop += delta;
+    if (!el || prev === topSpace) return;
+    // A live list stays on its newest rows; a list read higher up moves by the change.
+    const next = spacerScrollTop({
+      prev,
+      next: topSpace,
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      anchorSupported: supportsOverflowAnchor(),
+    });
+    if (next !== el.scrollTop) el.scrollTop = next;
   }, [topSpace]);
   // Inner messages-wrapper div. We observe its size with a ResizeObserver so
   // that any height change (badge/emote/cosmetic images settling in after a

@@ -35,8 +35,9 @@ export interface InboxViewState {
   hasMore: boolean;
   /** The first answer came back (or failed). */
   loaded: boolean;
-  /** The next older page, when there is one. */
-  loadOlder: () => void;
+  /** The next older page, when there is one. Answers whether it added rows:
+   *  false when the read failed or held nothing new. */
+  loadOlder: () => Promise<boolean>;
   /** Show the viewer's change at once; the next read from Rust replaces it. */
   patch: (fn: (rows: InboxItem[]) => InboxItem[]) => void;
 }
@@ -54,6 +55,10 @@ export function useInboxView(surface: InboxSurface, enabled: boolean): InboxView
   const cursor = useRef<string | null>(null);
   const loadedCount = useRef(INBOX_PAGE);
   const loadingOlder = useRef(false);
+  const rowsRef = useRef(rows);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
 
   useEffect(() => {
     loadedCount.current = Math.max(INBOX_PAGE, rows.length);
@@ -99,11 +104,15 @@ export function useInboxView(surface: InboxSurface, enabled: boolean): InboxView
     };
   }, [enabled, surface]);
 
-  const loadOlder = useCallback(() => {
-    if (!enabled || !hasMore || !cursor.current || loadingOlder.current) return;
+  const loadOlder = useCallback((): Promise<boolean> => {
+    if (!enabled || !hasMore || !cursor.current) return Promise.resolve(false);
+    // One already coming: the list changes when it lands.
+    if (loadingOlder.current) return Promise.resolve(true);
     loadingOlder.current = true;
-    invoke<InboxViewPayload>('get_inbox_view', { filter: 'all', surface, cursor: cursor.current, limit: INBOX_PAGE })
+    return invoke<InboxViewPayload>('get_inbox_view', { filter: 'all', surface, cursor: cursor.current, limit: INBOX_PAGE })
       .then((view) => {
+        const known = new Set(rowsRef.current.map((r) => r.row_id));
+        const added = view.rows.filter((r) => !known.has(r.row_id));
         setRows((prev) => {
           const seen = new Set(prev.map((r) => r.row_id));
           return [...prev, ...view.rows.filter((r) => !seen.has(r.row_id))];
@@ -111,8 +120,12 @@ export function useInboxView(surface: InboxSurface, enabled: boolean): InboxView
         setHasMore(view.has_more);
         cursor.current = view.cursor;
         seedCounts(view);
+        return added.length > 0;
       })
-      .catch((e) => Logger.debug('[Inbox] older page failed:', e))
+      .catch((e) => {
+        Logger.debug('[Inbox] older page failed:', e);
+        return false;
+      })
       .finally(() => {
         loadingOlder.current = false;
       });

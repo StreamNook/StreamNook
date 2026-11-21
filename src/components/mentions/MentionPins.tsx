@@ -295,6 +295,13 @@ export function MentionPinsBlock({
   // Clear all takes the ids drawn when the press began, so a pin that lands
   // between the press and the click is never closed unseen.
   const clearIds = useRef<string[]>([]);
+  // A press that began on the button; the keyboard (no press) closes what is drawn now.
+  // Either way the press is spent: the next one starts from nothing.
+  const clearAll = () => {
+    const ids = clearIds.current.length ? clearIds.current : shownPins.map((p) => p.entry.id);
+    clearIds.current = [];
+    putAway(ids);
+  };
 
   // ---- what is in view ----------------------------------------------------
   const drawn = form === 'full' ? shownPins : form === 'count_line' ? [] : shownPins.slice(-1);
@@ -407,7 +414,7 @@ export function MentionPinsBlock({
             e.preventDefault();
             clearIds.current = shownPins.map((p) => p.entry.id);
           }}
-          onClick={() => putAway(clearIds.current.length ? clearIds.current : shownPins.map((p) => p.entry.id))}
+          onClick={clearAll}
           className="flex-shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-textSecondary transition-colors hover:bg-white/10 hover:text-textPrimary"
         >
           Clear all
@@ -463,7 +470,7 @@ export function MentionPinsBlock({
                   e.preventDefault();
                   clearIds.current = shownPins.map((p) => p.entry.id);
                 }}
-                onClick={() => putAway(clearIds.current)}
+                onClick={clearAll}
                 className="flex-shrink-0 rounded-md px-1.5 py-0.5 font-semibold transition-colors hover:bg-white/10 hover:text-textPrimary"
               >
                 Clear all

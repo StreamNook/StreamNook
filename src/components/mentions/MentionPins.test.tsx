@@ -101,6 +101,20 @@ describe('MentionPinsBlock', () => {
     expect(dismissCalls()).toEqual([['sample-pin-1', 'sample-pin-2']]);
   });
 
+  it('Clear all by keyboard (no press) closes what is drawn now, and a spent press is not reused', () => {
+    render(pins(1, 2));
+    const find = () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Clear all') as HTMLElement;
+    // A press and click, then more pins land and the keyboard clears: the old press is spent.
+    act(() => {
+      find().dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    });
+    act(() => find().click());
+    expect(dismissCalls().at(-1)).toEqual(['sample-pin-1', 'sample-pin-2']);
+    render(pins(3, 4));
+    act(() => find().click());
+    expect(dismissCalls().at(-1)).toEqual(['sample-pin-3', 'sample-pin-4']);
+  });
+
   it('opens a pin of its own chat with onOpenOwn and another chat with onOpenOther', () => {
     const own = vi.fn();
     const other = vi.fn();

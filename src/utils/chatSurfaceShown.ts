@@ -29,6 +29,10 @@ export interface DesktopShownInputs {
   searchOpen: boolean;
   /** The drops drawer or the emote picker covers the stack. */
   coverOpen: boolean;
+  /** A full-window overlay is over the chat: Drops & Channel Points, Emote Sets
+   *  or the Marketplace (Live Streams and the Dashboard render nothing of
+   *  their own, so they cover nothing). */
+  pageOverlayOpen: boolean;
 }
 
 /** What an Android chat surface knows. */
@@ -58,6 +62,7 @@ export function chatSurfaceShown(i: ChatShownInputs): boolean {
     i.multiNookChatHidden ||
     !i.chatViewActive ||
     i.searchOpen ||
-    i.coverOpen
+    i.coverOpen ||
+    i.pageOverlayOpen
   );
 }

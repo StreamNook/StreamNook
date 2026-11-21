@@ -223,3 +223,39 @@ describe('the channel pin has one open store', () => {
     expect(writes).toEqual([false]);
   });
 });
+
+describe('a card that toggles itself as it appears', () => {
+  // The mention context card opens once as it is placed: its effect runs in the commit that
+  // brought its slot, so the hook must already hold that layout, not the one before it.
+  function OpensWhenPlaced({ kind, control }: { kind: StackKind; control: Hook['control'][StackKind] }) {
+    const done = React.useRef(false);
+    React.useEffect(() => {
+      if (!control.placed || done.current) return;
+      done.current = true;
+      control.onToggle();
+    }, [control]);
+    return <Reporter kind={kind} onPresence={control.onPresence} />;
+  }
+  function Host({ col }: { col: HTMLElement }) {
+    const stack = useChatTopStack(col);
+    React.useLayoutEffect(() => {
+      latest = stack;
+    });
+    return <OpensWhenPlaced kind="mention_context" control={stack.control.mention_context} />;
+  }
+
+  it('toggles against the layout that placed it', async () => {
+    const first: StackLayout = {
+      slots: [{ kind: 'mention_context', open: false, form: 'strip', height: 36 }],
+      max_height: 400,
+      height: 36,
+      room_key: 'xqc',
+    };
+    // Rust's first answer places the card; a second one never comes in this test.
+    vi.mocked(invoke).mockResolvedValueOnce(first).mockImplementation(() => new Promise(() => {}));
+    act(() => reactRoot.render(<Host col={column(1000)} />));
+    await flush();
+    expect(latest.control.mention_context.placed).toBe(true);
+    expect(latest.control.mention_context.open).toBe(true);
+  });
+});

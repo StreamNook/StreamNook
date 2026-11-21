@@ -28,6 +28,7 @@ export function useDesktopChatShown(local: { chatViewActive: boolean; searchOpen
   const profileModalOpen = useAppStore((s) => s.profileModalUser != null);
   const fullScreenWithoutChat = useAppStore((s) => s.isPlayerFullscreen && !s.fsChatOpen);
   const multiNookChatHidden = usemultiNookStore((s) => s.isMultiNookActive && s.isChatHidden);
+  const pageOverlayOpen = useAppStore((s) => s.showDropsOverlay || s.showEmoteSetsOverlay || s.showMarketplaceOverlay);
   const coverOpen = useChatCovered();
   const pageVisible = usePageVisible();
   return chatSurfaceShown({
@@ -45,5 +46,6 @@ export function useDesktopChatShown(local: { chatViewActive: boolean; searchOpen
     chatViewActive: local.chatViewActive,
     searchOpen: local.searchOpen,
     coverOpen,
+    pageOverlayOpen,
   });
 }

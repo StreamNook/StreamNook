@@ -39,7 +39,10 @@ export function rowHolding(rows: readonly InboxItem[], id: string): string | nul
 export function useInboxFocus(opts: {
   rows: readonly InboxItem[];
   hasMore: boolean;
-  loadOlder: () => void;
+  /** Asks for the next older page. A list that can say how it went answers
+   *  whether the page added rows: false for a failed read or one with nothing
+   *  new, so the search never waits on a list that will not change. */
+  loadOlder: () => void | Promise<boolean>;
   loaded: boolean;
   container: RefObject<HTMLElement | null>;
   active: boolean;
@@ -47,12 +50,14 @@ export function useInboxFocus(opts: {
   const { rows, hasMore, loadOlder, loaded, container, active } = opts;
   const focus = useMentionFocus();
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
-  const pages = useRef<{ nonce: number; asked: number; at: number }>({ nonce: -1, asked: 0, at: -1 });
+  const pages = useRef<{ nonce: number; asked: number; at: number; told: number }>({ nonce: -1, asked: 0, at: -1, told: -1 });
 
   useEffect(() => {
     if (!focus || !active || !loaded) return;
     const rowId = rowHolding(rows, focus.id);
     if (rowId) {
+      // Found: a page still in flight has nothing left to say.
+      pages.current.told = focus.nonce;
       setFocusedRowId(rowId);
       const el = container.current?.querySelector<HTMLElement>(`[data-mention-ids~="${CSS.escape(focus.id)}"]`);
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -70,16 +75,31 @@ export function useInboxFocus(opts: {
       state.asked = 0;
       state.at = -1;
     }
+    // Says it once per request, whichever way the search ends.
+    const giveUp = (n: number) => {
+      if (state.told === n) return;
+      state.told = n;
+      useAppStore.getState().addToast(FOCUS_MISSING_WORDS, 'info');
+      settleMentionFocus(n);
+    };
     if (hasMore && state.asked < FOCUS_MAX_PAGES && state.at !== rows.length) {
       state.asked += 1;
       state.at = rows.length;
-      loadOlder();
+      const nonce = focus.nonce;
+      const answer = loadOlder();
+      // A page that failed or added nothing leaves the list as it was, so nothing
+      // would ask again: the search ends here instead of waiting for ever.
+      if (answer && typeof answer.then === 'function') {
+        answer.then(
+          (grew) => {
+            if (!grew) giveUp(nonce);
+          },
+          () => giveUp(nonce),
+        );
+      }
       return;
     }
-    if (!hasMore || state.asked >= FOCUS_MAX_PAGES) {
-      useAppStore.getState().addToast(FOCUS_MISSING_WORDS, 'info');
-      settleMentionFocus(focus.nonce);
-    }
+    if (!hasMore || state.asked >= FOCUS_MAX_PAGES) giveUp(focus.nonce);
   }, [focus, active, loaded, rows, hasMore, loadOlder, container]);
 
   return focusedRowId;

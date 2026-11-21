@@ -65,7 +65,7 @@ import PredictionOverlay from './PredictionOverlay';
 import PollOverlay from './PollOverlay';
 import { ChatOverlayStack } from './chat/ChatOverlayStack';
 import { HypeStackCard } from './chat/HypeStackCard';
-import { jumpTarget, stackSpacer } from './chat/stackSpacer';
+import { jumpTarget, recenterAfterSearch, stackSpacer } from './chat/stackSpacer';
 import { useChatTopStack, type StackKind } from './chat/chatTopStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
 import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
@@ -3238,9 +3238,24 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const id = searchJumpRef.current;
     searchJumpRef.current = null;
     if (!id) return;
-    const timer = setTimeout(() => mentionScrollRef.current(id, { highlight: false, align: 'center' }), 400);
+    const timer = setTimeout(() => {
+      // Only while the list is still paused where the jump left it and the row is
+      // in view: a viewer who scrolled or resumed since is never pulled back.
+      const row = document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
+      const list = row?.closest<HTMLElement>('.overflow-y-auto');
+      const rect = (el: HTMLElement | null | undefined) => {
+        const r = el?.getBoundingClientRect();
+        return r ? { top: r.top, bottom: r.bottom } : null;
+      };
+      if (!recenterAfterSearch({ paused: isPausedRef.current, row: rect(row), list: rect(list) })) return;
+      mentionScrollRef.current(id, { highlight: false, align: 'center' });
+    }, 400);
     return () => clearTimeout(timer);
   }, [searchOpen]);
+  // Scrolling or resuming ends the search jump's claim on the list.
+  useEffect(() => {
+    if (!isPaused) searchJumpRef.current = null;
+  }, [isPaused]);
   useEffect(() => {
     if (!mentionRooms) return;
     const rooms = mentionRooms.split('|');
@@ -3289,6 +3304,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     };
   }, [mentionRooms, mentionChannelId, getMessageId]);
   const shownMentionCard = mentionCard && mentionCard.rooms === mentionRooms ? mentionCard.entry : null;
+  const dismissMentionCard = useCallback(() => setMentionCard(null), []);
 
   // A pinned mention clicked (SN-284): opened here, in this chat only (never
   // through the window-wide jump hand-off, which another pane showing the
@@ -4789,6 +4805,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   }, [setChatPaused]);
 
   const handleListScroll = useCallback((distanceToBottom: number, isUserScroll: boolean) => {
+    // A viewer's own scroll ends a search jump's claim on the list.
+    if (isUserScroll) searchJumpRef.current = null;
     // Debug logging - to be removed after verification
     if (isUserScroll && distanceToBottom > 150) {
       Logger.debug('[ChatWidget] Potential Pause Trigger:', { distanceToBottom, isUserScroll, isPaused });
@@ -5012,7 +5030,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             <span className="glass-panel rounded-full px-4 py-2 text-[13px] font-medium text-textPrimary">Drop to upload</span>
           </div>
         )}
-        {isMainSurface && !isMultiNookActive && <ChatDockPanel top={chromeHeight} />}
+        {isMainSurface && !isMultiNookActive && <ChatDockPanel top={paneTop} />}
         {/* Floating cards at the top of chat. Twitch allows a poll and a
             prediction at once, so they stack in one column, laid out by Rust:
             the user's order, one card open, and no more than its share of
@@ -5022,6 +5040,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             Kick slug / YouTube UC id that can never produce an event. */}
         <ChatOverlayStack
           top={overlayTop}
+          // Chat search takes the top of the column (its bar sits under the stack's
+          // layer): the cards stay mounted, hidden, and return as search closes.
+          hidden={searchOpen}
           maxHeight={topStack.maxHeight}
           more={topStack.more}
           onBottom={setStackBottom}
@@ -5089,7 +5110,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           {shownMentionCard && (
             <MentionContextCard
               entry={shownMentionCard}
-              onDismiss={() => setMentionCard(null)}
+              onDismiss={dismissMentionCard}
               stack={topStack.control.mention_context}
               measure={topStack.measure}
             />

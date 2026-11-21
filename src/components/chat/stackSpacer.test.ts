@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { targetFor } from '../../utils/scrollChatToMessage';
-import { chromeBottom, coveredTop, jumpTarget, spacerScrollDelta, stackBottomOf, stackSpacer } from './stackSpacer';
+import { chromeBottom, coveredTop, jumpTarget, recenterAfterSearch, spacerScrollDelta, spacerScrollTop, stackBottomOf, stackSpacer } from './stackSpacer';
 
 const read = (p: string) => readFileSync(resolve(__dirname, '..', '..', '..', p), 'utf8');
 
@@ -54,11 +54,47 @@ describe('a browser without overflow anchoring', () => {
     expect(spacerScrollDelta(40, 180, true)).toBe(0);
   });
 
+  it('keeps a live list on its bottom instead of knocking it off its newest rows', () => {
+    // The spacer grew 40 -> 180 (scrollHeight already holds it). A list 20 px from the bottom
+    // before the change was live: it stays on the bottom. One read 600 px up moves by the change.
+    const live = { prev: 40, next: 180, scrollTop: 2240, scrollHeight: 3000, clientHeight: 600, anchorSupported: false };
+    // distance before = (3000 - 600) - 140 - 2240 = 20
+    expect(2400 - 140 - live.scrollTop).toBe(20);
+    expect(spacerScrollTop(live)).toBe(2400);
+    const reading = { ...live, scrollTop: 1000 };
+    expect(spacerScrollTop(reading)).toBe(1140);
+    // Shrinking works the same way, and an anchoring browser is left alone.
+    expect(spacerScrollTop({ ...reading, prev: 180, next: 40 })).toBe(860);
+    expect(spacerScrollTop({ ...live, anchorSupported: true })).toBe(live.scrollTop);
+  });
+
   it('the list applies it in a layout effect on the spacer, and asks the browser which it is', () => {
     const list = read('src/components/ChatMessageList.tsx');
-    expect(list).toContain('spacerScrollDelta(prev, topSpace, supportsOverflowAnchor())');
+    expect(list).toContain('anchorSupported: supportsOverflowAnchor()');
+    expect(list).toContain('spacerScrollTop({');
     expect(list).toMatch(/useLayoutEffect\(\(\) => \{\s*const prev = spacerRef\.current;/);
     expect(read('src/components/chat/stackSpacer.ts')).toContain("CSS.supports('overflow-anchor', 'auto')");
+  });
+});
+
+describe('a search jump made again as search closes', () => {
+  const list = { top: 100, bottom: 700 };
+  it('happens only while the list is still paused with the row in view', () => {
+    expect(recenterAfterSearch({ paused: true, row: { top: 300, bottom: 320 }, list })).toBe(true);
+  });
+
+  it('never pulls back a viewer who resumed live chat or scrolled the row away', () => {
+    expect(recenterAfterSearch({ paused: false, row: { top: 300, bottom: 320 }, list })).toBe(false);
+    expect(recenterAfterSearch({ paused: true, row: { top: 900, bottom: 920 }, list })).toBe(false);
+    expect(recenterAfterSearch({ paused: true, row: { top: 20, bottom: 40 }, list })).toBe(false);
+    expect(recenterAfterSearch({ paused: true, row: null, list })).toBe(false);
+  });
+
+  it('the widget clears the claim on a viewer scroll and on resume, and asks before it jumps', () => {
+    const widget = read('src/components/ChatWidget.tsx');
+    expect(widget).toContain('if (isUserScroll) searchJumpRef.current = null;');
+    expect(widget).toMatch(/if \(!isPaused\) searchJumpRef\.current = null;/);
+    expect(widget).toContain('recenterAfterSearch({ paused: isPausedRef.current');
   });
 });
 

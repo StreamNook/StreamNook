@@ -40,6 +40,32 @@ export function spacerScrollDelta(prev: number, next: number, anchorSupported: b
   return next - prev;
 }
 
+/** A list this close to its bottom (px) was following live chat. */
+export const LIVE_BOTTOM_PX = 100;
+
+/**
+ * Where `scrollTop` goes in the layout pass the spacer changed in. It reads the layout AFTER
+ * the change (`scrollHeight` already holds `next`). A browser with overflow anchoring keeps the
+ * rows by itself. One without moves the scroll by the change, except for a list that was
+ * following live chat (within `LIVE_BOTTOM_PX` of the bottom before the change): that one stays
+ * on the bottom, since adding the change to a live list knocks it off its newest rows.
+ */
+export function spacerScrollTop(o: {
+  prev: number;
+  next: number;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  anchorSupported: boolean;
+}): number {
+  const delta = spacerScrollDelta(o.prev, o.next, o.anchorSupported);
+  if (delta === 0) return o.scrollTop;
+  const bottom = Math.max(0, o.scrollHeight - o.clientHeight);
+  const distanceBefore = bottom - (o.next - o.prev) - o.scrollTop;
+  if (distanceBefore < LIVE_BOTTOM_PX) return bottom;
+  return o.scrollTop + delta;
+}
+
 /** Whether this browser anchors scroll to the rows when content above grows. */
 export function supportsOverflowAnchor(): boolean {
   try {
@@ -87,6 +113,21 @@ export function jumpTarget(o: {
     else target = o.scrollTop;
   }
   return Math.max(0, Math.min(target, o.scrollHeight - o.containerHeight));
+}
+
+/**
+ * Whether a jump made from chat search is made again as search closes (the stack returns and
+ * covers the row's top): only while the list is still paused where the jump left it and the row
+ * is still in view. A viewer who scrolled, or resumed live chat, since the jump is never pulled
+ * back to an old result. Rects are viewport pixels.
+ */
+export function recenterAfterSearch(o: {
+  paused: boolean;
+  row: { top: number; bottom: number } | null;
+  list: { top: number; bottom: number } | null;
+}): boolean {
+  if (!o.paused || !o.row || !o.list) return false;
+  return o.row.bottom > o.list.top && o.row.top < o.list.bottom;
 }
 
 /** The breathing room under the stack before the first row of the list. */

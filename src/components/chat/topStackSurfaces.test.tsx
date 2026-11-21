@@ -153,8 +153,10 @@ describe('the desktop chat widget', () => {
     expect(widget).toMatch(/key="modroom-pane"[\s\S]*?style=\{\{ paddingTop: paneTop \}\}/);
     expect(widget).toMatch(/<DropsChatBar[\s\S]*?headerInset=\{paneTop\}/);
     expect(widget).toMatch(/<ChatMessagesPanel[\s\S]*?headerInset=\{listSpacer\}/);
-    // The header-only users keep the header: the dock list under it and the combined-chat bar.
-    expect(widget).toContain('<ChatDockPanel top={chromeHeight} />');
+    // The dock list opens under the stack (it would sit over the cards at the header), the
+    // combined-chat bar keeps the header.
+    expect(widget).toContain('<ChatDockPanel top={paneTop} />');
+    expect(widget).not.toContain('<ChatDockPanel top={chromeHeight} />');
   });
 
   it('the channel pin, the mention context card and the pins are stack cards, not floats', () => {
@@ -179,6 +181,21 @@ describe('the desktop chat widget', () => {
     expect(src('src/components/chat/chatTopStack.ts')).not.toContain('pin_mentions');
     expect(src('src/components/chat/ChatOverlayStack.tsx')).not.toContain('pin_mentions');
     expect(src('src/components/multichat/BlendedChatPane.tsx')).toMatch(/<HypeStackCard/);
+  });
+
+  it('the combined feed keeps its own top room under an empty stack', () => {
+    const blended = src('src/components/multichat/BlendedChatPane.tsx');
+    expect(blended).toContain('headerInset={Math.max(stackBottom, BLENDED_TOP_INSET_PX)}');
+    expect(blended).toContain('const BLENDED_TOP_INSET_PX = 40');
+  });
+
+  it('the channel pin card takes taps only on the card itself', () => {
+    expect(src('src/components/chat/PinnedBar.tsx')).toContain("className={`pointer-events-none items-center ${hidden ? 'hidden' : ''}`}");
+  });
+
+  it('chat search hides the whole stack (it sits above the search bar) and keeps it mounted', () => {
+    const widget = src('src/components/ChatWidget.tsx');
+    expect(widget).toMatch(/<ChatOverlayStack\s+top=\{overlayTop\}[\s\S]*?hidden=\{searchOpen\}/);
   });
 
   it('the combined feed and the pane ids follow the design', () => {
