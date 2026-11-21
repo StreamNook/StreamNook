@@ -58,5 +58,5 @@ export default function ChatDockPane({ chat }: { chat: DockedChat }) {
     [chat, state?.title, state?.game_name, state?.viewer_count, state?.started_at, live, answered, isTwitch, providerLive],
   );
 
-  return <ChatWidget channelOverride={channelOverride} hypeTrainOverride={isTwitch ? hypeTrain : undefined} />;
+  return <ChatWidget channelOverride={channelOverride} hypeTrainOverride={isTwitch ? hypeTrain : undefined} surfaceId="dock" />;
 }

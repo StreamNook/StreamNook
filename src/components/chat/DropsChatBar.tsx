@@ -8,6 +8,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { CaretDown, CaretUp } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
+import { setChatCover } from '../../utils/chatCovers';
 import { Logger } from '../../utils/logger';
 import { Tooltip } from '../ui/Tooltip';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
@@ -404,6 +405,12 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
   const line = view && showsHere(view, channelId, login) ? barLine(view) : null;
   const [open, setOpen] = useState(false);
   const [pickerWas, setPickerWas] = useState(emotePickerOpen);
+  // The drawer covers the pinned mentions' stack while it is open.
+  useEffect(() => {
+    if (!open) return;
+    setChatCover('drops-drawer', true);
+    return () => setChatCover('drops-drawer', false);
+  }, [open]);
   const [maxHeight, setMaxHeight] = useState(320);
   const { claiming, claim } = useDropClaim();
   const hostRef = useRef<HTMLDivElement>(null);

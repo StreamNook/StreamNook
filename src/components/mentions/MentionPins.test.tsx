@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-// SN-284: the pins block holds still under the pointer, and putting away the
-// last line it holds lets the hold go (the block unmounts, so no pointerleave
-// ever comes): the next pin still shows.
+// SN-284: the pins block. X closes one through Rust, Clear all closes the ids
+// that were drawn when the press began, a press opens by location, and while
+// the pointer moved here a pin Rust ended stays drawn (D16).
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MotionGlobalConfig } from 'framer-motion';
@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 MotionGlobalConfig.skipAnimations = true;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null), convertFileSrc: (p: string) => p, Channel: class {} }));
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
   emit: vi.fn(async () => {}),
@@ -26,30 +26,34 @@ vi.mock('../../utils/platform', () => ({
 }));
 
 import { invoke } from '@tauri-apps/api/core';
-import { MentionPinsView } from './MentionPins';
+import { MentionPinsBlock } from './MentionPins';
+import { samplePin } from '../settings/pinSamples';
 import type { MentionPin } from '../../types';
-
-const pin = (id: string, text: string): MentionPin => ({
-  entry: {
-    id,
-    platform: 'twitch',
-    room: 'xqc',
-    channel_login: 'xqc',
-    sender_id: id,
-    sender_login: id,
-    sender_name: id,
-    text,
-    kind: 'mention',
-    at_ms: 0,
-    read: true,
-    removed: false,
-  },
-  until_ms: 0,
-  run: 1,
-});
 
 let host: HTMLElement;
 let root: Root;
+
+const pins = (...ns: number[]): MentionPin[] =>
+  ns.map((n) => samplePin(n, 'mention', `user${n}`, '#ffffff', `message ${n}`, '9:00 PM'));
+
+function render(list: MentionPin[], over: Partial<React.ComponentProps<typeof MentionPinsBlock>> = {}) {
+  act(() =>
+    root.render(
+      <MentionPinsBlock
+        pins={list}
+        form="full"
+        shown={false}
+        warm={false}
+        onOpenOwn={over.onOpenOwn ?? (() => {})}
+        onOpenOther={over.onOpenOther ?? (() => {})}
+        {...over}
+      />,
+    ),
+  );
+}
+
+const dismissCalls = () =>
+  vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'dismiss_mention_pins').map(([, args]) => (args as { ids: string[] }).ids);
 
 beforeEach(() => {
   vi.mocked(invoke).mockClear();
@@ -61,52 +65,72 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.useRealTimers();
 });
 
-const block = () => host.querySelector('[data-mention-pin]')?.parentElement?.parentElement as HTMLElement;
-const ids = () => [...host.querySelectorAll('[data-mention-pin]')].map((el) => el.getAttribute('data-mention-pin'));
-
-describe('MentionPinsView', () => {
-  it('lets the hold go when the last line it holds is put away', async () => {
-    const onOpen = vi.fn();
-    act(() => root.render(<MentionPinsView live={[pin('a', '@you one')]} onOpen={onOpen} />));
-    expect(ids()).toEqual(['a']);
-    act(() => {
-      block().dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
-      block().dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }));
-    });
-    const x = host.querySelector('button[aria-label="Dismiss this pinned mention"]') as HTMLButtonElement;
-    await act(async () => x.click());
-    expect(invoke).toHaveBeenCalledWith('dismiss_mention_pin', { id: 'a' });
-    expect(ids()).toEqual([]);
-    // Rust's next answer: a new mention. It shows even though the pointer
-    // never "left" the block that went away.
-    act(() => root.render(<MentionPinsView live={[pin('b', '@you two')]} onOpen={onOpen} />));
-    expect(ids()).toEqual(['b']);
+describe('MentionPinsBlock', () => {
+  it('draws nothing with no pins', () => {
+    render([]);
+    expect(host.querySelector('[data-mention-pins]')).toBeNull();
   });
 
-  it('holds still under the pointer, then shows the newest on leave', () => {
-    const onOpen = vi.fn();
-    act(() => root.render(<MentionPinsView live={[pin('a', '@you one')]} onOpen={onOpen} />));
-    act(() => {
-      block().dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
-      block().dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }));
-    });
-    act(() => root.render(<MentionPinsView live={[pin('b', '@you two'), pin('a', '@you one')]} onOpen={onOpen} />));
-    expect(ids()).toEqual(['a']);
-    act(() => {
-      block().dispatchEvent(new PointerEvent('pointerout', { bubbles: true }));
-      block().dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }));
-    });
-    expect(ids()).toEqual(['b']);
+  it('draws the oldest first and the newest last', () => {
+    render(pins(1, 2, 3));
+    const ids = [...host.querySelectorAll('[data-pin-id]')].map((e) => (e as HTMLElement).dataset.pinId);
+    expect(ids).toEqual(['sample-pin-1', 'sample-pin-2', 'sample-pin-3']);
   });
 
-  it('opens with the line, not with its X', async () => {
-    const onOpen = vi.fn();
-    act(() => root.render(<MentionPinsView live={[pin('a', '@you one')]} onOpen={onOpen} />));
-    const openButton = host.querySelector('button[aria-label$="Open it"]') as HTMLButtonElement;
-    await act(async () => openButton.click());
-    expect(onOpen).toHaveBeenCalledTimes(1);
-    expect(invoke).not.toHaveBeenCalledWith('dismiss_mention_pin', expect.anything());
+  it('the X closes one pin through Rust', () => {
+    render(pins(1, 2));
+    const x = host.querySelector('[data-pin-id="sample-pin-1"] button[aria-label="Dismiss this pinned mention"]') as HTMLElement;
+    act(() => x.click());
+    expect(dismissCalls()).toEqual([['sample-pin-1']]);
+    expect(host.querySelector('[data-pin-id="sample-pin-1"]')).toBeNull();
+  });
+
+  it('Clear all closes the ids drawn when the press began, not a pin that landed after', () => {
+    render(pins(1, 2));
+    const clear = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Clear all') as HTMLElement;
+    act(() => {
+      clear.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    });
+    // A third pin lands between the press and the click.
+    render(pins(1, 2, 3));
+    const clear2 = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Clear all') as HTMLElement;
+    act(() => clear2.click());
+    expect(dismissCalls()).toEqual([['sample-pin-1', 'sample-pin-2']]);
+  });
+
+  it('opens a pin of its own chat with onOpenOwn and another chat with onOpenOther', () => {
+    const own = vi.fn();
+    const other = vi.fn();
+    const list = pins(1, 2);
+    list[1] = { ...list[1], channel_mark: { room: 'kick:x', platform: 'kick', channel: 'x' } };
+    render(list, { onOpenOwn: own, onOpenOther: other });
+    act(() => (host.querySelector('[data-pin-id="sample-pin-1"] [role="button"]') as HTMLElement).click());
+    expect(own).toHaveBeenCalledTimes(1);
+    act(() => (host.querySelector('[data-pin-id="sample-pin-2"] [role="button"]') as HTMLElement).click());
+    expect(other).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds a pin Rust ended while the pointer moved here, and lets go after 2 seconds', () => {
+    vi.useFakeTimers();
+    render(pins(1, 2, 3));
+    const block = host.querySelector('[data-mention-pins]') as HTMLElement;
+    act(() => {
+      block.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+    });
+    render(pins(2, 3));
+    expect(host.querySelector('[data-pin-id="sample-pin-1"]')).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(2100);
+    });
+    expect(host.querySelector('[data-pin-id="sample-pin-1"]')).toBeNull();
+  });
+
+  it('reports the pins in view only while shown', () => {
+    const reportVisible = vi.fn();
+    render(pins(1), { shown: false, reportVisible });
+    expect(reportVisible).toHaveBeenLastCalledWith([]);
   });
 });

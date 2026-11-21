@@ -16,7 +16,8 @@ import { useChatConnectionStore } from '../../stores/chatConnectionStore';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { parseKey, sliceLookupKey } from '../../utils/providerKey';
 import { invoke } from '@tauri-apps/api/core';
-import { MentionPins } from '../mentions/MentionPins';
+import { DesktopPins } from '../mentions/DesktopPins';
+import type { PinRoomRef } from '../../utils/pinSurfaces';
 import { MentionContextCard } from '../mentions/MentionContextCard';
 import type { MentionEntry, MentionPin } from '../../types';
 import { openProfilePopup } from '../../utils/openProfilePopup';
@@ -88,8 +89,13 @@ export function BlendedChatPane({
   channels,
   readOnly = false,
   transparent = false,
+  pins = false,
 }: {
   channels: BlendedChannel[];
+  /** The MultiChat host's blended chat registers as the `blended` pin surface
+   *  (SN-284). The click-through overlay window never passes it: it shows no
+   *  pins and reports no surface. */
+  pins?: boolean;
   /** No composer: the overlay window is a viewer, not a place to type. */
   readOnly?: boolean;
   /** No own background: the host paints the (glass) ground. */
@@ -281,10 +287,13 @@ export function BlendedChatPane({
   // source's own chat, opened here. A message no longer in the feed shows as
   // the "Older than chat history" card instead.
   const pinRooms = useMemo(
-    () => (readOnly ? '' : channels.map((c) => sliceLookupKey(provOf(c), c.channel)).join('|')),
-    [channels, readOnly],
+    () => (readOnly || !pins ? '' : channels.map((c) => sliceLookupKey(provOf(c), c.channel)).join('|')),
+    [channels, readOnly, pins],
   );
-  const pinsMixed = new Set(channels.map(provOf)).size > 1;
+  const pinRoomRefs = useMemo<PinRoomRef[]>(
+    () => channels.map((c) => ({ provider: provOf(c), channel: c.channel })),
+    [channels],
+  );
   // The card belongs to the rooms it was opened in: another set of chats
   // never shows it.
   const [pinCardFor, setPinCardFor] = useState<{ rooms: string; entry: MentionEntry } | null>(null);
@@ -616,7 +625,16 @@ export function BlendedChatPane({
         {/* Pinned mentions (SN-284), and over them, in its own layer so they
             never move, the card for one too old to scroll to. */}
         <div className="pointer-events-none absolute left-3 right-3 top-0 z-20 flex flex-col items-center pt-2">
-          <MentionPins rooms={pinRooms} mixed={pinsMixed} onOpen={openPinnedMention} />
+          {pins && !readOnly && (
+            <DesktopPins
+              surfaceId="blended"
+              rooms={pinRoomRefs}
+              active
+              chatViewActive
+              searchOpen={false}
+              onOpenOwn={openPinnedMention}
+            />
+          )}
         </div>
         {pinCard && (
           <div className="pointer-events-none absolute left-3 right-3 top-0 z-[21] flex flex-col items-center">

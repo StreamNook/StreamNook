@@ -55,10 +55,9 @@ import {
   useChatTabsVisible,
   useViewingStreamChat,
 } from '../chat/ChatTabStrip';
-import { openPinnedMention, useMentionsStore } from '../mentions/mentionInbox';
+import { useMentionsStore } from '../mentions/mentionInbox';
 import { MentionContextCard } from '../mentions/MentionContextCard';
-import { MentionPinsView } from '../../components/mentions/MentionPins';
-import { useMentionPins } from '../../hooks/useMentionPins';
+import { PhonePins, usePhonePins } from '../chat/PhonePins';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { usePinsOpen } from '../watch/pinsOpen';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
@@ -281,8 +280,6 @@ export const WatchScreen: React.FC = () => {
   const mentionCard = useMentionsStore((s) => s.contextCard);
   const activeChatRoom = useChatTabsStore((s) => s.activeChannel);
   const showMentionCard = !!mentionCard && mentionCard.room === activeChatRoom;
-  // Mentions pinned over the chat on screen (SN-284): Rust's list for its room.
-  const mentionPins = useMentionPins(activeChatRoom ?? '');
   // The viewer picked the audio-only rendition: there is no picture to float.
   const audioOnly = useAppStore((s) => s.activeQuality === 'audio_only');
   const pipOnLeave = useAppStore((s) => s.settings.video_player?.pip_on_leave) !== false;
@@ -1892,6 +1889,18 @@ export const WatchScreen: React.FC = () => {
   // gives up the keyboard (keys would go into a composer nobody can see, over the tabs or the
   // video), and its menus stop taking taps meant for what is on screen (the column's mark below).
   const chatOutOfSight = mini || chatClass === 'hidden';
+  // Mentions pinned over the chat on screen (SN-284): Rust's list for the
+  // `phone-watch` surface, whose mode follows the layout (a rotation or a fold
+  // changes the mode, never the id). Over the video only the pins' own card
+  // is drawn, in the dark ink; the lower third shows strips only.
+  const mentionPins = usePhonePins({
+    surfaceId: 'phone-watch',
+    room: activeChatRoom ?? null,
+    mode: chatOverlay ? 'over-video' : verticalLower || verticalGrown ? 'vertical' : sideBySide ? 'landscape' : 'stacked',
+    chatOutOfSight,
+    stripsOnly: verticalLower,
+    overVideo: chatOverlay || verticalLower,
+  });
   useEffect(() => {
     if (!chatOutOfSight || !chatColumnEl) return;
     const field = focusUnder<Element>(chatColumnEl, document.activeElement);
@@ -2294,7 +2303,7 @@ export const WatchScreen: React.FC = () => {
                 // they are all still one rotation away. Mentions pinned for
                 // you belong to the room, so they show there too (SN-284).
                 (!chatOverlay && ((streamScoped && currentHypeTrain) || pinned.length > 0 || showMentionCard)) ||
-                mentionPins.length > 0
+                mentionPins.pins.length > 0
                   ? // Pure layout now: no background, no border, no blur, no
                     // shadow. Each child already carries its own container
                     // (PinnedBanner is an sn-popover, the hype train draws its
@@ -2326,13 +2335,16 @@ export const WatchScreen: React.FC = () => {
                   them. A tap opens the mention in this chat (the pane on
                   screen takes the jump); in the lower third it grows the chat
                   first. */}
-              <MentionPinsView
+              <PhonePins
                 key={activeChatRoom ?? ''}
-                live={mentionPins}
-                phone
-                onOpen={(pin) => {
+                pins={mentionPins.pins}
+                shown={mentionPins.shown}
+                reportVisible={mentionPins.reportVisible}
+                inboxSurface="watch"
+                overVideo={chatOverlay || verticalLower}
+                form={verticalLower ? 'floor' : 'full'}
+                onBeforeOpen={() => {
                   if (verticalLower) moveVerticalChat('expanded');
-                  openPinnedMention(pin.entry);
                 }}
               />
               {/* The hype train belongs to the STREAM, not to whichever chat

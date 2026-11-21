@@ -37,6 +37,7 @@ import PluginUiHost from './plugins-ui/PluginUiHost';
 import PluginUpdatesChecker from './components/plugins/PluginUpdatesChecker';
 import PluginOverlayOutlet from './plugins-ui/PluginOverlayOutlet';
 import { usemultiNookStore } from './stores/multiNookStore';
+import { setChatCover } from './utils/chatCovers';
 import { isSoloAdapt, type PlaybackAdapt } from './utils/linkAdapt';
 import LoadingWidget from './components/LoadingWidget';
 import ToastManager from './components/ToastManager';
@@ -508,6 +509,12 @@ function App() {
     if (chatRevealTimer.current) window.clearTimeout(chatRevealTimer.current);
     chatRevealTimer.current = window.setTimeout(() => setChatRevealed(false), 150);
   };
+  // A collapsed hover-reveal column is not in front of the viewer (the pinned
+  // mentions' `chatSurfaceShown` rule).
+  useEffect(() => {
+    setChatCover('hover-reveal', autoHideActive && !chatRevealed);
+    return () => setChatCover('hover-reveal', false);
+  }, [autoHideActive, chatRevealed]);
   // Collapse + drop any pending timer whenever auto-hide stops applying.
   useEffect(() => {
     if (!autoHideActive) setChatRevealed(false);

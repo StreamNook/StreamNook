@@ -2350,7 +2350,7 @@ export default function MultiChatWindow() {
               componentName="Combined chat"
               resetKeys={[channels.map((c) => `${c.provider ?? 'twitch'}:${c.channel}`).join('|')]}
             >
-              <BlendedChatPane channels={channels} />
+              <BlendedChatPane channels={channels} pins />
             </ErrorBoundary>
           ) : layoutTree ? (
             // Custom splits: a binary tree of panes (utils/splitTree). Leaves

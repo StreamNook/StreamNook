@@ -161,7 +161,9 @@ import { usePinStore } from '../stores/pinStore';
 import { useVodReplayStore, useVodReplaySnapshot, setVodReplayShowing } from '../stores/vodReplayStore';
 import { SegmentedSelect } from './settings/_primitives';
 import type { TwitchStream, HypeTrainData, MentionEntry, MentionPin } from '../types';
-import { MentionPins } from './mentions/MentionPins';
+import { DesktopPins } from './mentions/DesktopPins';
+import { setChatCover } from '../utils/chatCovers';
+import type { PinRoomRef } from '../utils/pinSurfaces';
 
 import { Logger } from '../utils/logger';
 import { stopArgs, stopToast } from '../utils/dropsStop';
@@ -224,6 +226,10 @@ export interface ChatWidgetProps {
    *  on. The pane owns the live value; MultiChat persists it per tab. */
   filterId?: string | null;
   onFilterIdChange?: (id: string | null) => void;
+  /** This chat's pin surface id (SN-284): `main-chat`, `dock`, `main-provider`
+   *  or `pane:<...>`. Absent: the main window's chat is `main-chat`, any other
+   *  override is a pane of its own room. */
+  surfaceId?: string;
 }
 
 // Minimum spacing between pause/resume transitions. Real gestures are hundreds
@@ -679,7 +685,7 @@ const PausedNewCount = ({ sliceKeys, isPaused }: { sliceKeys: string; isPaused: 
   return delta > 0 ? <> ({fitCount(delta)} new)</> : null;
 };
 
-const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp, onFilterIdChange }: ChatWidgetProps = {}) => {
+const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp, onFilterIdChange, surfaceId: surfaceIdProp }: ChatWidgetProps = {}) => {
   // Single source of truth for the source platform. Twitch (the default) runs the
   // entire native path below unchanged; a non-twitch provider reads the shared
   // `provider:channel` slice and every Twitch-only effect early-returns on it.
@@ -1164,6 +1170,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     if (activeView === 'modroom' && !modRoomEligible) setActiveView('chat');
   }, [activeView, modRoomEligible, isTwitch]);
   const [showEmotePicker, setShowEmotePicker] = useState(false);
+  // The picker covers the pins' stack while it is open (chatSurfaceShown).
+  useEffect(() => {
+    if (!showEmotePicker) return;
+    setChatCover('emote-picker', true);
+    return () => setChatCover('emote-picker', false);
+  }, [showEmotePicker]);
   // The drops drawer and the emote picker share the space above the message
   // box: opening the drawer closes the picker, and the bar closes its drawer
   // when the picker opens.
@@ -3260,7 +3272,23 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // through the window-wide jump hand-off, which another pane showing the
   // same room could take). Rust marks it read and drops its pin; then it is
   // scrolled to, or after one history fetch, or shown as the card.
-  const pinsMixed = blendActive && new Set(blendSources.map((c) => c.provider)).size > 1;
+  // The pin surface this chat is (SN-284) and the chats it shows, in the
+  // (provider, channel) shape Rust builds its own room keys from.
+  const pinSurfaceId =
+    surfaceIdProp ??
+    (isMainSurface
+      ? channelOverride
+        ? 'main-provider'
+        : 'main-chat'
+      : `pane:${makeKey(provider, channelOverride?.user_login ?? '')}`);
+  const pinRooms = useMemo<PinRoomRef[]>(
+    () =>
+      (pausedCountKeys ? pausedCountKeys.split('|').filter(Boolean) : []).map((k) => {
+        const i = k.indexOf(':');
+        return i > 0 ? { provider: k.slice(0, i), channel: k.slice(i + 1) } : { provider: 'twitch', channel: k };
+      }),
+    [pausedCountKeys],
+  );
   const openPinnedMention = useCallback(
     async (pin: MentionPin) => {
       const rooms = mentionRooms;
@@ -5467,7 +5495,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           // Pinned mentions (SN-284), under the Twitch pin or alone in its
           // slot: one place, so a pin coming or going never remounts them.
           // The "Older than chat history" card (z-16) stays over them.
-          after={<MentionPins rooms={mentionRooms} mixed={pinsMixed} onOpen={openPinnedMention} />}
+          after={
+            <DesktopPins
+              surfaceId={pinSurfaceId}
+              rooms={pinRooms}
+              active={channelOverride ? channelOverride.is_active !== false : true}
+              chatViewActive={activeView === 'chat' && !(isVodReplay && chatMode === 'replay')}
+              searchOpen={searchOpen}
+              onOpenOwn={openPinnedMention}
+            />
+          }
         />
 
         {/* Staging area removed - using direct rendering with ResizeObserver */}

@@ -569,8 +569,25 @@ import type { LineButton } from './chat/modLine';
 import { INLINE_TIME_STYLE, OWN_LINE_TIME_STYLE, timestampOnOwnLine } from './chat/chatTimestamp';
 import { WatchStreakFlame } from './icons/WatchStreakFlame';
 
+/**
+ * The pinned-mention variant of a row (SN-284, D14). A pin is the real row of
+ * the chat it was said in, drawn outside the chat list: no flash, no link
+ * previews, no giant emote, the body held to two lines, and the time always
+ * shown, with the day when the message is not from today. The host passes no
+ * moderation, reply or copy callbacks, so the hover dock, mod line and slider
+ * never mount.
+ */
+export interface PinnedRowInfo {
+  /** The row's hash from Rust: the memo redraws the row when it changes. */
+  rev: number;
+  /** "Mon 3:04 PM"-style day prefix, or null when the message is from today. */
+  dayLabel: string | null;
+}
+
 interface ChatMessageProps {
   message: string | BackendChatMessage; // Raw IRC message or Backend Message Object
+  /** Set only by the pinned mentions block. */
+  pinned?: PinnedRowInfo;
   onUsernameClick?: (
     userId: string,
     username: string,
@@ -803,6 +820,9 @@ const chatMessageAreEqual = (prevProps: ChatMessageProps, nextProps: ChatMessage
     }
   }
   if (prevProps.sourceMark !== nextProps.sourceMark) return false;
+  // The pinned variant: its row hash and day label decide the redraw.
+  if (prevProps.pinned?.rev !== nextProps.pinned?.rev || prevProps.pinned?.dayLabel !== nextProps.pinned?.dayLabel) return false;
+  if ((prevProps.pinned === undefined) !== (nextProps.pinned === undefined)) return false;
   // Who may act on the row. Mod status usually lands after the join's history
   // rows are drawn, and the line buttons show without a hover, so those rows
   // must repaint when it does. Each changes about once per channel.
@@ -829,6 +849,14 @@ const chatMessageAreEqual = (prevProps: ChatMessageProps, nextProps: ChatMessage
   // All other props (callbacks) can be ignored for re-render decisions
   // since they don't affect the visual output of the message
   return true;
+};
+
+/** A pin's body: two lines, then cut. */
+const PINNED_CLAMP_STYLE: React.CSSProperties = {
+  display: '-webkit-box',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 2,
+  overflow: 'hidden',
 };
 
 // Stable empty reference for the third-party badge read below, so the zustand
@@ -940,7 +968,7 @@ function UsernameWithCosmetics({
   );
 }
 
-const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onEmoteOpen, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId, homeProvider = 'twitch', sourceMark, modLine = null }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessageInner({ message, pinned, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onEmoteOpen, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId, homeProvider = 'twitch', sourceMark, modLine = null }: ChatMessageProps) {
   // Field selectors, NOT a whole-store subscription. This component is mounted
   // once per chat row, so subscribing to the entire store made every row
   // re-render on every unrelated store tick (hours-watched, viewer count, etc.).
@@ -1026,6 +1054,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // Zero Date parsing on main thread!
   const timestampOwnLine = timestampOnOwnLine(chatDesign?.timestamp_position);
   const formattedTimestamp = (() => {
+    // A pin always shows its time (when it was said), with the day when it
+    // was not said today, whatever the chat's own timestamp setting.
+    if (pinned) {
+      const time = parsed.metadata?.formatted_timestamp;
+      if (!time) return pinned.dayLabel;
+      return pinned.dayLabel ? `${pinned.dayLabel} ${time}` : time;
+    }
     if (!chatDesign?.show_timestamps) return null;
 
     // Use pre-computed timestamps from Rust metadata
@@ -1205,11 +1240,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // allowlist. Passed into extraction so those links auto-expand too.
   const userTrustedDomains = chatDesign?.link_preview_trusted_domains;
   const linkPreviewItems = useMemo(() => {
-    if (!linkPreviewsEnabled) return [];
+    // A pin is a compact line: previews never load for it (Rust builds pin
+    // rows with link previews off, and this keeps a stale row off the network).
+    if (!linkPreviewsEnabled || pinned) return [];
     const links: RowLink[] = [];
     for (const s of parsed.segments ?? []) if (s.type === 'link') links.push(s);
     return previewUrlsFromLinks(links, 2, userTrustedDomains);
-  }, [linkPreviewsEnabled, parsed.segments, userTrustedDomains]);
+  }, [linkPreviewsEnabled, pinned, parsed.segments, userTrustedDomains]);
   // Only trusted links suppress their inline URL in clean mode (their card is
   // the link). Untrusted links keep the inline link and add a load-on-click chip.
   const trustedPreviewUrls = useMemo(
@@ -2420,8 +2457,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // A reward with no text, which Rust builds as its own row (body = the
   // reward's title): one line, "<name> redeemed <title> <cost>", like Twitch.
   const isRewardEventRow = !!parsed.tags.get('sn-reward-title');
+  // A pin never draws the giant emote: it stays one inline line.
   const isGigantifiedEmote =
-    msgId === 'gigantified-emote-message' || sourceMsgId === 'gigantified-emote-message';
+    !pinned && (msgId === 'gigantified-emote-message' || sourceMsgId === 'gigantified-emote-message');
   const isAnimatedMessage =
     msgId === 'animated-message' || sourceMsgId === 'animated-message';
   const isSubModeBypass =
@@ -3439,6 +3477,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   } else if (isHighlighted) {
     animationClass = 'animate-highlight-flash';
   }
+  // A pin is on screen for a while and never flashes.
+  if (pinned) animationClass = '';
 
   // Alternating row backgrounds are handled in CSS (.chat-striped > row:nth-child)
   // so they cost zero React re-renders. See ChatMessageList + globals.css.
@@ -3726,7 +3766,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             moving the name away from the badges. */}
         <div
           className={atmosphereFrost ? `inline-block max-w-full -ml-1.5 -my-0.5 rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
-          style={{ fontSize: `${chatDesign?.font_size ?? 14}px`, lineHeight: 1.625 }}
+          style={{
+            fontSize: `${chatDesign?.font_size ?? 14}px`,
+            lineHeight: 1.625,
+            // A pin holds to two lines.
+            ...(pinned ? PINNED_CLAMP_STYLE : {}),
+          }}
         >
           {/* The time leads the row's inline flow, on the text's baseline, so
               wrapped text still starts at the left edge; "own_line" gives it a
