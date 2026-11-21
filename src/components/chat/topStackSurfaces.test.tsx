@@ -189,6 +189,14 @@ describe('the desktop chat widget', () => {
     expect(blended).toContain('const BLENDED_TOP_INSET_PX = 40');
   });
 
+  it('a tap on a pin asks Rust once (the host does), and the pins card does not re-render with the chat', () => {
+    const pins = src('src/components/mentions/DesktopPins.tsx');
+    expect(pins).not.toContain("invoke('open_mention'");
+    expect(pins).toContain('export const DesktopPins = memo(DesktopPinsView)');
+    expect(src('src/components/ChatWidget.tsx')).toContain('onDismiss={dismissMentionCard}');
+    expect(src('src/components/multichat/BlendedChatPane.tsx')).toContain('onDismiss={dismissPinCard}');
+  });
+
   it('the channel pin card takes taps only on the card itself', () => {
     expect(src('src/components/chat/PinnedBar.tsx')).toContain("className={`pointer-events-none items-center ${hidden ? 'hidden' : ''}`}");
   });

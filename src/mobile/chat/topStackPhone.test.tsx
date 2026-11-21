@@ -160,6 +160,16 @@ describe('the mention context card in the lower third', () => {
   });
 });
 
+describe('the screens register through the shown rules', () => {
+  it('the watch screen reports with the stream in the rule, so no stream is never in front', () => {
+    const watch = src('src/mobile/screens/WatchScreen.tsx');
+    expect(watch).toMatch(/const pinSurface = watchPinSurface\(\{\s*show,/);
+    expect(watch).toContain('chatOutOfSight: pinSurface.pinsOutOfSight');
+    expect(watch).toContain('const chatOutOfSight = pinSurface.chatOutOfSight');
+    expect(src('src/mobile/screens/ChatsScreen.tsx')).toContain('chatOutOfSight: chatsChatOutOfSight({ shown, layerUp, idle })');
+  });
+});
+
 describe('the cleared tall chat keeps its pins over the video', () => {
   it('a tap on a pin grows the chat first', () => {
     const grow = vi.fn();
