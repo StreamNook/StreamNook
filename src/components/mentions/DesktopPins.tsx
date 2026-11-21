@@ -99,7 +99,8 @@ export function DesktopPins(props: DesktopPinsProps) {
   useEffect(() => {
     onPins?.(pins);
   }, [pins, onPins]);
-  if (pins.length === 0) return null;
+  // The stack is hidden while chat search is open (its results own the top).
+  if (pins.length === 0 || props.searchOpen) return null;
   return (
     <MentionPinsBlock
       pins={pins}
