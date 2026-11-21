@@ -476,6 +476,12 @@ pub struct ChatMessage {
     /// the page can time each hop a row took.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub received_at_ms: Option<i64>,
+    /// The badges carry their own art in three sizes and a title, resolved in
+    /// Rust (a pinned mention, which can come from a chat this window never
+    /// joined): a renderer draws that art as it is and never looks a Twitch
+    /// badge up in its own cache. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub badges_resolved: bool,
 }
 
 /// A chat row as a native renderer draws it, built once in Rust so the shell

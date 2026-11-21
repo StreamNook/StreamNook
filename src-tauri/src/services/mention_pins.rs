@@ -751,6 +751,7 @@ fn run_pass(now: Mono, credit: bool) {
 /// Publish what a pass found: build the rows (outside every lock), then the
 /// answer and revision under the pins state, then the event after unlock.
 fn finish(runs: &[PinRun], cfg: &PinCfg, force_bump: bool) {
+    mention_pin_row::retain_live(runs);
     let rows: Vec<Option<PinRow>> = runs.iter().map(|r| mention_pin_row::cached(&r.entry)).collect();
     let today = day_number(wall_ms());
     let moved = with_state(|st| {
@@ -863,6 +864,17 @@ pub fn fold_for_flush() {
     if pins_on() && TICKING.load(Ordering::SeqCst) && LIVE_PINS.load(Ordering::SeqCst) > 0 {
         run_pass(mono_now(), true);
     }
+}
+
+/// Whether any window reports a pin surface drawn and not covered: the row
+/// owner rebuilds rows only while one is.
+pub fn any_surface_shown() -> bool {
+    pins_on() && with_state(|st| st.windows.values().any(|w| w.surfaces.iter().any(|s| s.shown)))
+}
+
+/// A pin's row was built or changed (no lock held): publish the answer again.
+pub fn rows_changed() {
+    schedule_pass(false);
 }
 
 /// A live pin was just filed (inbox lock released): publish it.

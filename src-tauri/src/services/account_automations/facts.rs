@@ -654,6 +654,7 @@ pub(crate) mod rows {
             segments: Vec::new(),
             metadata: MessageMetadata::default(),
             received_at_ms: Some(1_000),
+            badges_resolved: false,
         }
     }
 

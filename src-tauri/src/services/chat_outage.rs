@@ -65,6 +65,7 @@ pub fn lost_row(channel: &str, at_ms: i64) -> ChatMessage {
         provider: "twitch".to_string(),
         channel: channel.to_string(),
         received_at_ms: None,
+        badges_resolved: false,
         emotes: Vec::new(),
         tags,
         layout: Default::default(),

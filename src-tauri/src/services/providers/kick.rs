@@ -1587,6 +1587,7 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
         provider: "kick".to_string(),
         channel: channel_key.to_string(),
         received_at_ms: None,
+        badges_resolved: false,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult {
@@ -1651,6 +1652,7 @@ fn build_event_message(
         provider: "kick".to_string(),
         channel: channel_key.to_string(),
         received_at_ms: None,
+        badges_resolved: false,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult {

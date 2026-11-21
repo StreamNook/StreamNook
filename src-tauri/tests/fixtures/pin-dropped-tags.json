@@ -1,0 +1,7 @@
+{
+  "dropped": [
+    "client-nonce",
+    "flags"
+  ],
+  "note": "Tags a remote pin snapshot leaves out. No renderer may read one."
+}

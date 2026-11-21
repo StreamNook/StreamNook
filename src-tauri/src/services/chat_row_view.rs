@@ -331,10 +331,21 @@ pub(crate) fn seen_color(login: &str) -> Option<String> {
 
 // ---- Twitch badge art --------------------------------------------------------
 
+/// One Twitch badge's art in the three sizes Twitch serves, and its title.
+/// A size an answer did not carry is empty; `best` falls back to the 2x one
+/// rows are drawn from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BadgeArt {
+    pub x1: String,
+    pub x2: String,
+    pub x4: String,
+    pub title: String,
+}
+
 #[derive(Default)]
 struct BadgeIndex {
-    global: HashMap<String, (String, String)>,
-    rooms: HashMap<String, HashMap<String, (String, String)>>,
+    global: HashMap<String, BadgeArt>,
+    rooms: HashMap<String, HashMap<String, BadgeArt>>,
 }
 
 static TWITCH_BADGES: RwLock<Option<BadgeIndex>> = RwLock::new(None);
@@ -349,10 +360,21 @@ pub(crate) fn has_room_badges(room_id: &str) -> bool {
 /// `room_id` is None, else that channel's own. Items are
 /// `(set_id, version_id, image_url_2x, title)`.
 pub fn note_twitch_badges<'a>(room_id: Option<&str>, items: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str)>) {
-    let map: HashMap<String, (String, String)> = items
+    note_twitch_badge_art(
+        room_id,
+        items.into_iter().map(|(set, ver, url, title)| {
+            (set, ver, BadgeArt { x1: String::new(), x2: url.to_string(), x4: String::new(), title: title.to_string() })
+        }),
+    );
+}
+
+/// `note_twitch_badges` with the art in all three sizes (a Helix answer
+/// carries them; a pinned mention draws the size its renderer asks for).
+pub fn note_twitch_badge_art<'a>(room_id: Option<&str>, items: impl IntoIterator<Item = (&'a str, &'a str, BadgeArt)>) {
+    let map: HashMap<String, BadgeArt> = items
         .into_iter()
-        .filter(|(_, _, url, _)| !url.is_empty())
-        .map(|(set, ver, url, title)| (format!("{set}/{ver}"), (url.to_string(), title.to_string())))
+        .filter(|(_, _, art)| !art.x2.is_empty())
+        .map(|(set, ver, art)| (format!("{set}/{ver}"), art))
         .collect();
     if map.is_empty() {
         return;
@@ -375,6 +397,12 @@ pub fn note_twitch_badges<'a>(room_id: Option<&str>, items: impl IntoIterator<It
 /// channel set was noted before: the history follow-up re-parses once the
 /// room is read and its patch carries the art.
 fn twitch_badge_art(room_id: Option<&str>, set: &str, version: &str) -> Option<(String, String)> {
+    twitch_badge_sizes(room_id, set, version).map(|art| (art.x2, art.title))
+}
+
+/// `twitch_badge_art` with all three sizes: what a pinned mention's badges
+/// carry. A size the source lacks is filled from the 2x art.
+pub fn twitch_badge_sizes(room_id: Option<&str>, set: &str, version: &str) -> Option<BadgeArt> {
     let guard = TWITCH_BADGES.read().ok()?;
     let index = guard.as_ref()?;
     let key = format!("{set}/{version}");
@@ -385,16 +413,31 @@ fn twitch_badge_art(room_id: Option<&str>, set: &str, version: &str) -> Option<(
     let room_art = matches!(set, "moderator" | "vip")
         .then(|| room_id.and_then(|room| crate::services::ffz_room_badges::art_for(room, set)))
         .flatten()
-        .and_then(|art| [art.x2, art.x4, art.x1].into_iter().find(|u| !u.is_empty()));
-    match room_art {
-        Some(url) => {
-            let title = noted.map(|(_, t)| t.clone()).unwrap_or_else(|| {
-                if set == "vip" { "VIP" } else { "Moderator" }.to_string()
-            });
-            Some((url, title))
+        .filter(|art| [&art.x2, &art.x4, &art.x1].iter().any(|u| !u.is_empty()));
+    let art = match room_art {
+        Some(art) => {
+            let x2 = [art.x2.clone(), art.x4.clone(), art.x1.clone()].into_iter().find(|u| !u.is_empty())?;
+            BadgeArt {
+                x1: art.x1,
+                x2,
+                x4: art.x4,
+                title: noted.map(|a| a.title.clone()).unwrap_or_else(|| if set == "vip" { "VIP" } else { "Moderator" }.to_string()),
+            }
         }
-        None => noted.cloned(),
-    }
+        None => noted.cloned()?,
+    };
+    Some(BadgeArt {
+        x1: if art.x1.is_empty() { art.x2.clone() } else { art.x1 },
+        x4: if art.x4.is_empty() { art.x2.clone() } else { art.x4 },
+        x2: art.x2,
+        title: art.title,
+    })
+}
+
+/// Whether the global badge sets were noted (Prime, Turbo, moderator and the
+/// rest, which every row can wear).
+pub(crate) fn has_global_badges() -> bool {
+    TWITCH_BADGES.read().ok().is_some_and(|g| g.as_ref().is_some_and(|i| !i.global.is_empty()))
 }
 
 /// Twitch's gift sub art (the Sub Gifter badge, as gift notices lead with),
@@ -410,7 +453,12 @@ pub fn gift_sub_art() -> Option<String> {
 pub(crate) fn room_badge_art(room_id: &str, set: &str, version: &str) -> Option<(String, String)> {
     let own = {
         let guard = TWITCH_BADGES.read().ok()?;
-        guard.as_ref()?.rooms.get(room_id).and_then(|m| m.get(&format!("{set}/{version}"))).cloned()
+        guard
+            .as_ref()?
+            .rooms
+            .get(room_id)
+            .and_then(|m| m.get(&format!("{set}/{version}")))
+            .map(|a| (a.x2.clone(), a.title.clone()))
     };
     let role = matches!(set, "moderator" | "vip")
         .then(|| crate::services::ffz_room_badges::art_for(room_id, set))
@@ -1536,7 +1584,30 @@ pub fn stamp(msg: &mut ChatMessage) {
 
 /// Stamps `metadata.view` whatever the switch says.
 pub fn stamp_view(msg: &mut ChatMessage) {
-    let prefs = prefs();
+    stamp_view_with(msg, StampOverride::default());
+}
+
+/// What one caller changes in the preferences a stamp reads (a pinned
+/// mention draws no link previews).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StampOverride {
+    pub link_previews: Option<bool>,
+}
+
+/// `stamp` with `ov` applied to the preferences.
+pub fn stamp_with(msg: &mut ChatMessage, ov: StampOverride) {
+    crate::services::bidi_text::balance_row(msg);
+    if enabled() {
+        stamp_view_with(msg, ov);
+    }
+}
+
+/// `stamp_view` with `ov` applied to the preferences.
+pub fn stamp_view_with(msg: &mut ChatMessage, ov: StampOverride) {
+    let mut prefs = prefs();
+    if let Some(on) = ov.link_previews {
+        prefs.link_previews = on;
+    }
     let own = user_override(&msg.provider, &msg.user_id).unwrap_or_default();
     let name_color = shown_color(own.color.as_deref().or(msg.color.as_deref()), &prefs);
     note_seen(&msg.username, &name_color);
@@ -1957,6 +2028,42 @@ mod tests {
         note_twitch_badges(Some("5150"), [("subscriber", "0", "https://c/sub0/2", "Subscriber")]);
         assert!(has_room_badges("5150"));
         assert_eq!(twitch_badge_art(Some("5150"), "subscriber", "0").unwrap().0, "https://c/sub0/2");
+    }
+
+    /// The badge index keeps 1x, 2x and 4x (a pin carries all three); a set noted with
+    /// only its 2x art fills the other sizes from it.
+    #[test]
+    fn the_badge_index_keeps_three_sizes() {
+        let sized = BadgeArt { x1: "https://s/1".into(), x2: "https://s/2".into(), x4: "https://s/4".into(), title: "Sized".into() };
+        note_twitch_badge_art(Some("31337"), [("subscriber", "9", sized.clone())]);
+        assert_eq!(twitch_badge_sizes(Some("31337"), "subscriber", "9"), Some(sized));
+        assert_eq!(twitch_badge_art(Some("31337"), "subscriber", "9"), Some(("https://s/2".into(), "Sized".into())), "rows still draw the 2x art");
+        note_twitch_badges(Some("31338"), [("subscriber", "9", "https://only/2", "Only 2x")]);
+        let filled = twitch_badge_sizes(Some("31338"), "subscriber", "9").unwrap();
+        assert_eq!((filled.x1.as_str(), filled.x2.as_str(), filled.x4.as_str()), ("https://only/2", "https://only/2", "https://only/2"));
+        assert!(twitch_badge_sizes(Some("31338"), "no-such-set", "1").is_none());
+    }
+
+    /// A pinned mention draws no link previews: its stamp reads the same
+    /// preferences with that one switched off.
+    #[test]
+    fn a_stamp_override_turns_link_previews_off_for_one_row() {
+        let msg = || -> ChatMessage {
+            serde_json::from_value(serde_json::json!({
+                "id": "ov-1", "user_id": "5", "username": "u", "display_name": "U", "color": "#123456", "badges": [], "timestamp": "",
+                "content": "see https://example.com/x", "provider": "twitch", "channel": "#ov", "tags": {},
+                "segments": [{ "type": "link", "content": "https://example.com/x", "url": "https://example.com/x" }], "metadata": {}
+            }))
+            .unwrap()
+        };
+        let mut plain = msg();
+        stamp_view(&mut plain);
+        let mut off = msg();
+        stamp_view_with(&mut off, StampOverride { link_previews: Some(false) });
+        let (a, b) = (plain.metadata.view.unwrap(), off.metadata.view.unwrap());
+        assert!(b.previews.is_empty(), "no previews for a pin");
+        assert_eq!(a.spans, b.spans, "everything else is the stamp's own");
+        assert_eq!(a.name_color, b.name_color);
     }
 
     #[test]

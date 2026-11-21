@@ -323,6 +323,7 @@ impl SuspiciousUsers {
             provider: "twitch".into(),
             channel,
             received_at_ms: None,
+            badges_resolved: false,
             emotes: Vec::new(),
             tags,
             layout: Default::default(),

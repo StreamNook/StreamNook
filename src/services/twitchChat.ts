@@ -174,6 +174,10 @@ export interface BackendChatMessage {
    *  authoritative and nothing reads this. */
   layout?: { height: number; width: number; has_reply?: boolean; is_first_message?: boolean };
   tags: { [key: string]: string };
+  /** The badges carry Twitch's art in three sizes and a title, resolved in Rust
+   *  (a pinned mention from a chat this window never joined): drawn as they are,
+   *  never looked up in this window's badge cache. */
+  badges_resolved?: boolean;
   // Pre-parsed segments from Rust (Phase 3.1 - The Endgame)
   segments?: MessageSegment[];
   // Pre-computed metadata - THE ENDGAME
@@ -232,7 +236,27 @@ const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: stri
     // global types a bundled icon). Bypass the Twitch badge cache, which is keyed
     // by Twitch badge names and would mis-resolve or drop them.
     let badgeData: ReturnType<typeof parseBadges>;
-    if (raw.provider && raw.provider !== 'twitch') {
+    if (raw.badges_resolved && (!raw.provider || raw.provider === 'twitch')) {
+      // Rust resolved this Twitch row's badge art (all three sizes and the title):
+      // draw exactly that. A badge it found no art for is left out, as the cache
+      // would have left it out.
+      badgeData = [];
+      for (const b of raw.badges) {
+        const x2 = b.image_url_2x || b.image_url_1x || b.image_url_4x;
+        if (!x2) continue;
+        badgeData.push({
+          key: `${b.name}/${b.version}`,
+          info: {
+            id: b.version,
+            image_url_1x: b.image_url_1x || x2,
+            image_url_2x: x2,
+            image_url_4x: b.image_url_4x || x2,
+            title: b.title,
+            description: b.description,
+          },
+        });
+      }
+    } else if (raw.provider && raw.provider !== 'twitch') {
       // Non-Twitch providers carry their own already-resolved badge images
       // (Kick: baked badges_v2 art + custom/default subscriber art; YouTube:
       // real per-tier member badge art), so build badgeData directly instead of

@@ -548,9 +548,10 @@ impl Inbox {
         if target.pin_from_ms.is_none() {
             return Vec::new();
         }
+        let run = self.run_ids(id);
         let mut dismissed = Vec::new();
         for e in self.entries.iter_mut() {
-            if !e.pin_dismissed && e.pin_from_ms.is_some() && (e.id == id || same_message(&target, e)) {
+            if !e.pin_dismissed && e.pin_from_ms.is_some() && run.iter().any(|r| *r == e.id) {
                 e.pin_dismissed = true;
                 dismissed.push(e.id.clone());
             }
@@ -718,14 +719,20 @@ impl Inbox {
             })
             .collect();
         list.sort_by(|a, b| (a.pin_from_ms, &a.id).cmp(&(b.pin_from_ms, &b.id)));
-        let mut runs: Vec<Vec<&MentionEntry>> = Vec::new();
-        for e in list {
-            match runs.iter_mut().find(|r| same_message(r[0], e)) {
-                Some(run) => run.push(e),
-                None => runs.push(vec![e]),
-            }
-        }
-        runs
+        chain_runs(list)
+    }
+
+    /// The ids of the run holding `id`: copies of one message, each filed
+    /// within a minute of the one before it. An entry no run holds (removed,
+    /// never pinned) is a run of its own.
+    fn run_ids(&self, id: &str) -> Vec<String> {
+        let mut list: Vec<&MentionEntry> = self.entries.iter().filter(|e| e.pin_from_ms.is_some() && !e.removed).collect();
+        list.sort_by(|a, b| (a.pin_from_ms, &a.id).cmp(&(b.pin_from_ms, &b.id)));
+        chain_runs(list)
+            .into_iter()
+            .find(|run| run.iter().any(|e| e.id == id))
+            .map(|run| run.iter().map(|e| e.id.clone()).collect())
+            .unwrap_or_else(|| vec![id.to_string()])
     }
 
     /// The live pins at `now_ms`, oldest first: runs whose oldest copy has not
@@ -752,9 +759,12 @@ impl Inbox {
 
     /// Run `f` on every entry of the run `head_id` stands for.
     fn pin_run_apply(&mut self, head_id: &str, f: impl Fn(&mut MentionEntry)) -> bool {
-        let Some(head) = self.entries.iter().find(|e| e.id == head_id).cloned() else { return false };
+        if !self.entries.iter().any(|e| e.id == head_id) {
+            return false;
+        }
+        let ids = self.run_ids(head_id);
         for e in self.entries.iter_mut() {
-            if e.id == head_id || (e.pin_from_ms.is_some() && same_message(&head, e)) {
+            if ids.iter().any(|id| *id == e.id) {
                 f(e);
             }
         }
@@ -922,6 +932,58 @@ impl Inbox {
 
     pub fn remote_pins_armed_ms(&self) -> i64 {
         self.remote_pins_armed_ms
+    }
+
+    /// A mention the server found starts pinning, at the local time it was
+    /// said (SN-284). The rule: remote pins are armed (a pull worked with Pin
+    /// mentions on), it was said at or after the later of the arming and the
+    /// switch stamp, within the last 24 h, it is a still unread Mention or
+    /// Reply of a chat not muted, and nothing pinned it already (a copy the
+    /// chat caught live keeps its live stamp; one filed from a backlog takes
+    /// this one). Answers whether it started pinning.
+    pub fn pin_remote(&mut self, id: &str, at_local: i64, cfg: &PinCfg, now_ms: i64) -> bool {
+        if !self.remote_pinnable(id, at_local, cfg, now_ms) {
+            return false;
+        }
+        let Some(e) = self.entries.iter_mut().find(|e| e.id == id) else { return false };
+        e.pin_from_ms = Some(at_local);
+        self.pin_enforce_max(cfg, now_ms);
+        true
+    }
+
+    /// The rule of `pin_remote`, without starting anything: lets a caller skip
+    /// building a row for a mention that cannot pin.
+    pub fn remote_pinnable(&self, id: &str, at_local: i64, cfg: &PinCfg, now_ms: i64) -> bool {
+        let Some(armed) = cfg.enabled_at_ms.filter(|_| cfg.on) else { return false };
+        if self.remote_pins_armed_ms == 0 {
+            return false;
+        }
+        let floor = armed.max(self.remote_pins_armed_ms);
+        if at_local < floor || now_ms - at_local >= PIN_UNSEEN_CAP_MS || at_local > now_ms + PIN_FUTURE_SLACK_MS {
+            return false;
+        }
+        let Some(e) = self.entries.iter().find(|e| e.id == id) else { return false };
+        e.pin_from_ms.is_none()
+            && !e.read
+            && !e.removed
+            && !e.pin_ended
+            && !e.pin_dismissed
+            && e.platform == "twitch"
+            && matches!(e.kind, MentionKind::Mention | MentionKind::Reply)
+            && !cfg.muted.contains(&e.room.to_lowercase())
+    }
+
+    /// End the pins of these entries (a gap in the watcher the server
+    /// confirmed), each with its run.
+    pub fn pin_end_ids(&mut self, ids: &[String]) -> bool {
+        let mut changed = false;
+        for id in ids {
+            let live = self.entries.iter().any(|e| e.id == *id && e.pin_from_ms.is_some() && !e.pin_ended);
+            if live {
+                changed |= self.pin_end_run(id);
+            }
+        }
+        changed
     }
 }
 
@@ -1148,6 +1210,30 @@ fn fold_text(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+/// Copies of one message join a run only while each arrives within this long
+/// of the one before it: a later copy is a new message to look at.
+pub const PIN_RUN_GAP_MS: i64 = 60_000;
+
+/// Group entries (oldest first by `(pin_from_ms, id)`) into runs: a copy joins
+/// the latest run of its message when it filed within `PIN_RUN_GAP_MS` of that
+/// run's last copy and the run is neither ended nor dismissed (nothing joins
+/// a pin that is over); otherwise it starts a run of its own.
+fn chain_runs<'a>(list: Vec<&'a MentionEntry>) -> Vec<Vec<&'a MentionEntry>> {
+    let mut runs: Vec<Vec<&MentionEntry>> = Vec::new();
+    for e in list {
+        let from = e.pin_from_ms.unwrap_or(0);
+        let open = runs.iter_mut().rev().find(|r| same_message(r[0], e)).filter(|r| {
+            let last = r.last().and_then(|l| l.pin_from_ms).unwrap_or(0);
+            !r[0].pin_ended && !r[0].pin_dismissed && from - last <= PIN_RUN_GAP_MS
+        });
+        match open {
+            Some(run) => run.push(e),
+            None => runs.push(vec![e]),
+        }
+    }
+    runs
 }
 
 fn same_message(a: &MentionEntry, b: &MentionEntry) -> bool {
@@ -1852,6 +1938,13 @@ fn flush(include_clock: bool) -> Result<(), String> {
 /// Called for each live message after the rule engine judged it, from the
 /// Twitch IRC lane and the provider lane.
 pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
+    on_verdict_raw(msg, verdict, None);
+}
+
+/// `on_verdict` with the IRC line a Twitch message was parsed from, which a
+/// pin keeps beside its snapshot so its row is built again with the emotes of
+/// the chat it was said in.
+pub fn on_verdict_raw(msg: &ChatMessage, verdict: &Verdict, raw: Option<&str>) {
     if msg.id.is_empty() {
         return;
     }
@@ -1864,7 +1957,7 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     }
     // Only a pin candidate keeps a snapshot of the row (the chat hot path
     // stays as it was for everything else).
-    let snapshot = entry.pin_from_ms.and_then(|_| crate::services::mention_pin_row::snapshot_of(msg));
+    let snapshot = entry.pin_from_ms.and_then(|_| crate::services::mention_pin_row::snapshot_of(msg, raw));
     let mut pin_surface = None;
     let visible = with_inbox(|inbox| {
         let visible = inbox.visible.contains(&entry.room);
@@ -2187,6 +2280,113 @@ pub fn arm_remote_pins() -> Option<i64> {
     })
 }
 
+/// Whether a mention the server found could start pinning now (the rule of
+/// `pin_remote`, nothing started).
+pub fn remote_pinnable(id: &str, at_local: i64) -> bool {
+    let cfg = config().pins;
+    with_pin_inbox(|inbox| (inbox.remote_pinnable(id, at_local, &cfg, now_ms()), Change::None)).unwrap_or(false)
+}
+
+/// A mention the server found starts pinning (see `Inbox::pin_remote`), with
+/// its snapshot stored in the same step, so the orphan sweep never sees a
+/// snapshot ahead of its stamp. Answers whether it started pinning.
+pub fn pin_remote(id: &str, at_local: i64, snapshot: Option<Box<serde_json::value::RawValue>>) -> bool {
+    let cfg = config().pins;
+    let started = with_pin_inbox(|inbox| {
+        let started = inbox.pin_remote(id, at_local, &cfg, now_ms());
+        if started {
+            if let Some(raw) = snapshot {
+                inbox.set_pin_row(id, raw);
+            }
+        }
+        (started, if started { Change::Dirty } else { Change::None })
+    })
+    .unwrap_or(false);
+    if started {
+        crate::services::mention_pins::on_filed();
+    }
+    started
+}
+
+/// The server confirmed a gap in its watcher for these mentions: their pins
+/// end.
+pub fn end_remote_pins(ids: &[String]) -> bool {
+    let changed = with_pin_inbox(|inbox| {
+        let changed = inbox.pin_end_ids(ids);
+        (changed, if changed { Change::Dirty } else { Change::None })
+    })
+    .unwrap_or(false);
+    if changed {
+        crate::services::mention_pins::on_pins_ended();
+    }
+    changed
+}
+
+/// A CLEARCHAT in a chat: one chatter's live pins there end (`target` is their
+/// id and login), or the whole chat's do (a `/clear`). Chats with no live pin
+/// cost no inbox lock.
+pub fn on_clearchat(room: &str, target: Option<(&str, &str)>) {
+    let room = room.to_lowercase();
+    if !crate::services::mention_pins::room_has_live_pin(&room) {
+        return;
+    }
+    match target {
+        Some((id, login)) => {
+            end_sender_pins(&room, id, login);
+        }
+        None => {
+            end_room_pins(&room);
+        }
+    }
+}
+
+/// What a non-Twitch provider's moderation frame asks of the inbox.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FrameAction {
+    /// One message was deleted.
+    Deleted(String),
+    /// A chatter was banned or timed out in `room` (their id and login).
+    Cleared { room: String, sender_id: String, sender_login: String },
+}
+
+/// What a frame a Kick, YouTube or TikTok chat published (its CLEARMSG or
+/// CLEARCHAT, the shapes Twitch's own lane emits) asks of the inbox. Twitch's
+/// own lane acts on its lines itself, so a Twitch frame answers None.
+pub fn provider_frame_action(json: &str) -> Option<FrameAction> {
+    if !json.contains("\"CLEARMSG\"") && !json.contains("\"CLEARCHAT\"") {
+        return None;
+    }
+    let frame: serde_json::Value = serde_json::from_str(json).ok()?;
+    let provider = frame.get("provider").and_then(|p| p.as_str()).unwrap_or_default();
+    if provider.is_empty() || provider == "twitch" {
+        return None;
+    }
+    let text = |key: &str| match frame.get(key) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    };
+    match frame.get("type").and_then(|t| t.as_str())? {
+        "CLEARMSG" => Some(text("target_msg_id")).filter(|id| !id.is_empty()).map(FrameAction::Deleted),
+        "CLEARCHAT" => {
+            let (sender_id, sender_login, channel) = (text("target_user_id"), text("target_user"), text("channel"));
+            (!channel.is_empty() && (!sender_id.is_empty() || !sender_login.is_empty()))
+                .then(|| FrameAction::Cleared { room: room_key(provider, &channel), sender_id, sender_login })
+        }
+        _ => None,
+    }
+}
+
+/// A moderation frame a Kick, YouTube or TikTok chat published: the deleted
+/// message leaves the inbox and a banned chatter's pins end, as they do on Twitch.
+pub fn on_provider_frame(json: &str) {
+    match provider_frame_action(json) {
+        Some(FrameAction::Deleted(id)) => on_message_deleted(&id),
+        Some(FrameAction::Cleared { room, sender_id, sender_login }) => on_clearchat(&room, Some((&sender_id, &sender_login))),
+        None => {}
+    }
+}
+
 /// A snapshot for an entry's pin row (see `InboxFile::pin_rows`).
 pub fn store_pin_row(id: &str, raw: Box<serde_json::value::RawValue>) {
     let _ = with_pin_inbox(|inbox| {
@@ -2362,9 +2562,124 @@ mod tests {
         assert!(inbox.pin_end_run("r1"));
         assert!(["r1", "r2", "r3"].iter().all(|id| inbox.get(id).is_some_and(|e| e.pin_ended)));
         assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["other"]);
-        // A fourth copy of an ended message joins the dead run: ended is final.
+        // A fourth copy never joins the ended run (ended is final); it is a new message to look at.
         inbox.file(live("r4", "xqc", "9", "@you hi", NOW - 1_000), NOW);
-        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["other"]);
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["other", "r4"]);
+        assert!(["r1", "r2", "r3"].iter().all(|id| inbox.get(id).is_some_and(|e| e.pin_ended)), "the old run stays ended");
+    }
+
+    /// Coordinator decision 1: copies form one run only while each arrives within 60 s of the
+    /// previous copy; a later copy starts a new run, and never joins an ended or dismissed one.
+    #[test]
+    fn copies_join_a_run_only_within_a_minute_of_the_previous_copy() {
+        let mut inbox = inbox_of(vec![
+            live("c1", "xqc", "9", "@you hi", NOW - 200_000),
+            live("c2", "xqc", "9", "@you hi", NOW - 150_000),
+            live("c3", "xqc", "9", "@you hi", NOW - 100_000),
+            live("c4", "xqc", "9", "@you hi", NOW - 30_000),
+        ]);
+        // Each copy is within 60 s of the one before it up to c3; c4 is 70 s after c3.
+        let cfg = PinCfg { expire_ms: None, ..cfg() };
+        let runs = inbox.pin_live_runs(&cfg, NOW);
+        assert_eq!(runs.iter().map(|r| r.ids.clone()).collect::<Vec<_>>(), vec![vec!["c1", "c2", "c3"], vec!["c4"]]);
+        // Ending or dismissing one run leaves the other alone.
+        assert!(inbox.pin_end_run("c1"));
+        assert!(inbox.get("c4").is_some_and(|e| !e.pin_ended));
+        assert_eq!(live_ids(&inbox, &cfg, NOW), vec!["c4"]);
+        // A copy 10 s after a dismissed run starts a new run, never joining it.
+        let dismissed = inbox.dismiss_pin("c4");
+        assert_eq!(dismissed, vec!["c4"]);
+        inbox.file(live("c5", "xqc", "9", "@you hi", NOW - 20_000), NOW);
+        assert_eq!(live_ids(&inbox, &cfg, NOW), vec!["c5"]);
+        assert_eq!(inbox.dismiss_pin("c5"), vec!["c5"], "dismissing takes only the run it is in");
+    }
+
+    /// 4c: remote pins arm on the first working pull, never before; they need an unread, still
+    /// pinnable Mention or Reply said at or after the arming and the switch stamp, within 24 h.
+    #[test]
+    fn a_remote_mention_pins_only_when_armed_in_time_unread_and_unpinned() {
+        let said = NOW - 30_000;
+        let remote = |id: &str| {
+            let mut e = entry(id, "xqc", said);
+            e.sender_id = "9".into();
+            e.pin_from_ms = None;
+            e
+        };
+        let mut inbox = inbox_of(vec![remote("m1")]);
+        assert!(!inbox.pin_remote("m1", said, &cfg(), NOW), "not armed: backlog never pins");
+        inbox.arm_remote_pins(NOW - 60_000);
+        assert!(!inbox.pin_remote("m1", NOW - 90_000, &cfg(), NOW), "said before the arming");
+        assert!(!inbox.pin_remote("m1", said, &PinCfg { enabled_at_ms: Some(NOW), ..cfg() }, NOW), "said before the switch stamp");
+        assert!(!inbox.pin_remote("m1", said, &PinCfg { on: false, ..cfg() }, NOW));
+        assert!(!inbox.pin_remote("m1", said, &PinCfg { muted: ["xqc".to_string()].into(), ..cfg() }, NOW));
+        assert!(inbox.pin_remote("m1", said, &cfg(), NOW));
+        assert_eq!(inbox.get("m1").and_then(|e| e.pin_from_ms), Some(said), "ordered by the local time it was said");
+        assert!(!inbox.pin_remote("m1", said, &cfg(), NOW), "already pinned");
+        // Read, a word or a removed one never pin; one older than 24 h does not either.
+        let mut read = remote("m2");
+        read.read = true;
+        let mut word = remote("m3");
+        word.kind = MentionKind::Word;
+        let mut removed = remote("m4");
+        removed.removed = true;
+        let old = remote("m5");
+        for e in [read, word, removed, old] {
+            inbox.file(e, NOW);
+        }
+        for id in ["m2", "m3", "m4"] {
+            assert!(!inbox.pin_remote(id, said, &cfg(), NOW), "{id}");
+        }
+        let day_ago = NOW - PIN_UNSEEN_CAP_MS;
+        inbox.arm_remote_pins(0); // already set: stays
+        let mut early = inbox_of(vec![remote("m5")]);
+        early.remote_pins_armed_ms = day_ago - 1_000_000;
+        assert!(!early.pin_remote("m5", day_ago, &cfg_since(day_ago - 1_000_000), NOW), "a day old");
+        assert!(early.pin_remote("m5", day_ago + 1, &cfg_since(day_ago - 1_000_000), NOW));
+    }
+
+    fn cfg_since(enabled: i64) -> PinCfg {
+        PinCfg { enabled_at_ms: Some(enabled), ..cfg() }
+    }
+
+    /// 4c: a tracked remote copy of an entry the backlog filed (no pin stamp) takes the remote rule.
+    #[test]
+    fn a_tracked_remote_copy_of_a_backfilled_entry_adopts_the_remote_pin_rule() {
+        let said = NOW - 10_000;
+        let mut backfilled = entry("bf1", "xqc", said);
+        backfilled.pin_from_ms = None;
+        let mut inbox = inbox_of(vec![backfilled]);
+        inbox.arm_remote_pins(NOW - 60_000);
+        assert!(inbox.remote_pinnable("bf1", said, &cfg(), NOW));
+        assert!(inbox.pin_remote("bf1", said, &cfg(), NOW));
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["bf1"]);
+        // The server's gap confirmed lost: its pin ends.
+        assert!(inbox.pin_end_ids(&["bf1".to_string()]));
+        assert!(live_ids(&inbox, &cfg(), NOW).is_empty());
+    }
+
+    #[test]
+    fn a_provider_frame_deletes_the_message_and_ends_a_banned_chatters_pins() {
+        let kick_delete = r#"{"type":"CLEARMSG","provider":"kick","channel":"kick:alpha","target_msg_id":"m-9"}"#;
+        assert_eq!(provider_frame_action(kick_delete), Some(FrameAction::Deleted("m-9".into())));
+        let yt_delete = r#"{"type":"CLEARMSG","provider":"youtube","channel":"youtube:UC1","target_msg_id":"yt-4"}"#;
+        assert_eq!(provider_frame_action(yt_delete), Some(FrameAction::Deleted("yt-4".into())));
+        let tt_delete = r#"{"type":"CLEARMSG","provider":"tiktok","channel":"tiktok:fan","target_msg_id":"7"}"#;
+        assert_eq!(provider_frame_action(tt_delete), Some(FrameAction::Deleted("7".into())));
+        let kick_ban = r#"{"type":"CLEARCHAT","provider":"kick","channel":"kick:Alpha","target_user_id":"55","target_user":"Spammer"}"#;
+        assert_eq!(
+            provider_frame_action(kick_ban),
+            Some(FrameAction::Cleared { room: room_key("kick", "kick:Alpha"), sender_id: "55".into(), sender_login: "Spammer".into() })
+        );
+        let tt_ban = r#"{"type":"CLEARCHAT","provider":"tiktok","channel":"tiktok:fan","target_user_id":123456}"#;
+        assert!(matches!(provider_frame_action(tt_ban), Some(FrameAction::Cleared { sender_id, .. }) if sender_id == "123456"));
+        // Twitch acts on its own lines; a frame with no target or no provider does nothing.
+        assert_eq!(provider_frame_action(r#"{"type":"CLEARMSG","provider":"twitch","channel":"x","target_msg_id":"a"}"#), None);
+        assert_eq!(provider_frame_action(r#"{"type":"CLEARCHAT","provider":"kick","channel":"kick:a"}"#), None);
+        assert_eq!(provider_frame_action(r#"{"type":"ROOMSTATE","provider":"kick"}"#), None);
+        // Every provider's frames go through the one publisher that tells the inbox.
+        let publish = include_str!("providers/mod.rs");
+        let body = &publish[publish.find("pub async fn publish_frame").unwrap()..];
+        assert!(body[..300.min(body.len())].contains("mention_inbox::on_provider_frame(&json)"));
     }
 
     #[test]
@@ -2722,6 +3037,7 @@ mod tests {
             segments: vec![],
             metadata: Default::default(),
             received_at_ms: None,
+            badges_resolved: false,
         };
         msg.tags.insert("reply-parent-msg-body".into(), "hello\\schat".into());
         assert_eq!(entry_for(&msg, MentionKind::Reply, NOW).reply_parent_text.as_deref(), Some("hello chat"));

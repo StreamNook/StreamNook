@@ -448,12 +448,21 @@ pub async fn refresh_global_badges() -> Result<HelixBadgesResponse, String> {
 /// Hands badge art to the native row view, which stamps it onto rows (the web
 /// renderers resolve it themselves from what these commands return).
 fn note_row_view_badges(room_id: Option<&str>, badges: &HelixBadgesResponse) {
-    crate::services::chat_row_view::note_twitch_badges(
+    crate::services::chat_row_view::note_twitch_badge_art(
         room_id,
         badges.data.iter().flat_map(|set| {
-            set.versions
-                .iter()
-                .map(move |v| (set.set_id.as_str(), v.id.as_str(), v.image_url_2x.as_str(), v.title.as_str()))
+            set.versions.iter().map(move |v| {
+                (
+                    set.set_id.as_str(),
+                    v.id.as_str(),
+                    crate::services::chat_row_view::BadgeArt {
+                        x1: v.image_url_1x.clone(),
+                        x2: v.image_url_2x.clone(),
+                        x4: v.image_url_4x.clone(),
+                        title: v.title.clone(),
+                    },
+                )
+            })
         }),
     );
 }

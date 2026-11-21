@@ -1383,6 +1383,44 @@ impl EmoteService {
         Ok((emote_set, seven_tv_ok))
     }
 
+    /// A channel's emote set for a pinned mention from a chat this app never
+    /// joined: the memory cache is only peeked (no recency moves, nothing is
+    /// written), a miss reads the providers and the answer is handed back and
+    /// stored nowhere, not here, not in the 7TV journal, not on disk. A
+    /// provider that fails keeps the saved dictionary's rows, so a slow
+    /// provider costs a pin its late emotes, never its words. None when the
+    /// channel has no id.
+    pub async fn fetch_channel_emotes_uncached(
+        &self,
+        channel_name: Option<String>,
+        channel_id: Option<String>,
+    ) -> Option<EmoteSet> {
+        let id = channel_id.clone().filter(|id| !id.is_empty())?;
+        {
+            let cache = self.cache.read().await;
+            if let Some(held) = cache.peek(&id).filter(|c| c.seven_tv_ok) {
+                return Some(held.set.clone());
+            }
+        }
+        let disk = crate::services::emote_set_cache::load(&id);
+        let (bttv_result, seven_tv_result, ffz_result) = tokio::join!(
+            self.fetch_bttv_emotes(channel_name.clone(), channel_id.clone()),
+            self.fetch_7tv_emotes(channel_name.clone(), channel_id.clone()),
+            self.fetch_ffz_emotes(channel_name.clone(), twitch_broadcaster_id(true, Some(&id)).map(str::to_string)),
+        );
+        let (bttv, bttv_ok) = bttv_result.unwrap_or((Vec::new(), false));
+        let (seven_tv, seven_tv_ok) = seven_tv_result.unwrap_or((Vec::new(), false));
+        let (ffz, ffz_ok) = ffz_result.unwrap_or((Vec::new(), false));
+        let mut set = EmoteSet { twitch: Vec::new(), bttv, seven_tv, ffz, kick: Vec::new(), seven_tv_ok };
+        if let Some(disk) = disk {
+            if !seven_tv_ok && !disk.seven_tv.is_empty() {
+                set.seven_tv = disk.seven_tv.clone();
+            }
+            keep_held_rows(&mut set, disk, bttv_ok, ffz_ok, true);
+        }
+        Some(set)
+    }
+
     /// Drop a channel's cached emote set so the next fetch re-pulls fresh from
     /// the providers. Used when the 7TV EventAPI reports an emote set change, so
     /// a freshly opened window (which reads through this cache) does not serve a
@@ -2622,6 +2660,66 @@ impl Default for EmoteService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pinned mention from a chat this app never joined reads its emotes
+    /// without touching the LRU: a hit is only peeked (recency stays), and
+    /// nothing in the method writes a cache, journals a delta or starts a refresh.
+    #[test]
+    fn the_uncached_fetch_peeks_the_lru_and_never_writes_it() {
+        let svc = EmoteService::new();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let set = |name: &str| EmoteSet {
+                twitch: Vec::new(),
+                bttv: Vec::new(),
+                seven_tv: vec![Emote {
+                    id: name.into(),
+                    name: name.into(),
+                    url: format!("https://cdn/{name}"),
+                    provider: EmoteProvider::SevenTV,
+                    is_zero_width: None,
+                    local_url: None,
+                    emote_type: None,
+                    owner_id: None,
+                    owner_name: None,
+                    original_name: None,
+                    owner_ref: None,
+                    width: None,
+                    height: None,
+                    modifier_flags: None,
+                    ffz_sub_only: None,
+                    animated: None,
+                }],
+                ffz: Vec::new(),
+                kick: Vec::new(),
+                seven_tv_ok: true,
+            };
+            {
+                let mut cache = svc.cache.write().await;
+                for key in ["1", "2"] {
+                    cache.put(
+                        key.to_string(),
+                        CachedEmoteSet { set: set(key), timestamp: SystemTime::now(), seven_tv_ok: true },
+                    );
+                }
+            }
+            let order = |cache: &lru::LruCache<String, CachedEmoteSet>| cache.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
+            let before = order(&*svc.cache.read().await);
+            // The least recently used set is read: a `get` would have moved it to the front.
+            let got = svc.fetch_channel_emotes_uncached(Some("room".into()), Some("1".into())).await.expect("a held set");
+            assert_eq!(got.seven_tv[0].name, "1");
+            assert_eq!(order(&*svc.cache.read().await), before, "recency did not move");
+            assert_eq!(svc.cache.read().await.len(), 2, "nothing was written");
+            // No channel id, nothing to read.
+            assert!(svc.fetch_channel_emotes_uncached(Some("room".into()), None).await.is_none());
+        });
+        let src = include_str!("emote_service.rs");
+        let body = &src[src.find("pub async fn fetch_channel_emotes_uncached").unwrap()..];
+        let body = &body[..body.find("/// Drop a channel's cached emote set").unwrap()];
+        for forbidden in [".put(", "put_dressed", "begin_refresh_window", "cache.write()", "replay_seventv_journal", "note_fetch_whole"] {
+            assert!(!body.contains(forbidden), "the uncached fetch must not call {forbidden}");
+        }
+    }
 
     /// Only a 404 says a channel is not on 7TV; a refused or rate-limited
     /// request must never overwrite a good saved set with globals only.

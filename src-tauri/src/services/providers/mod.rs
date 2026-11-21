@@ -362,6 +362,8 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
 /// their `channel` field, so a provider can drive the existing deletion display
 /// + mod log by emitting the same frame shape Twitch's IRC path does.
 pub async fn publish_frame(json: String) {
+    // A provider's CLEARMSG / CLEARCHAT reaches the mention inbox as Twitch's do.
+    crate::services::mention_inbox::on_provider_frame(&json);
     if let Some(tx) = IrcService::broadcaster().await {
         // Every window: the frame's channel is inside the JSON, and the rule is
         // to deliver when the route cannot tell.

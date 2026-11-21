@@ -153,9 +153,45 @@ pub struct RemoteMention {
     #[serde(default)]
     pub reply_parent_text: Option<String>,
     pub at_ms: i64,
+    /// The PRIVMSG body exactly as Twitch sent it (slice B; a watcher that
+    /// does not send it never gets a pin).
+    #[serde(default)]
+    pub body_raw: Option<String>,
+    /// The escaped tag section of the line (slice B).
+    #[serde(default)]
+    pub tags_raw: Option<String>,
+    /// The body is a `/me` with its wrapper cut off (slice B).
+    #[serde(default)]
+    pub action: bool,
+    /// The watcher has no gap covering this mention: it may pin (slice B).
+    #[serde(default)]
+    pub tracked: bool,
+}
+
+/// What a remote mention carries for pinning, beside the entry itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteExtra {
+    pub tracked: bool,
+    pub raw: Option<crate::services::mention_pin_row::RemoteRaw>,
 }
 
 impl RemoteMention {
+    /// The slice-B fields, before `into_entry` consumes the mention. The raw
+    /// body and tags must both be there, or the row has nothing to be built from.
+    pub fn extra(&self) -> RemoteExtra {
+        let raw = match (self.body_raw.as_deref(), self.tags_raw.as_deref()) {
+            (Some(body), Some(tags)) if !body.is_empty() && !tags.is_empty() => {
+                Some(crate::services::mention_pin_row::RemoteRaw {
+                    body_raw: body.to_string(),
+                    tags_raw: tags.to_string(),
+                    action: self.action,
+                })
+            }
+            _ => None,
+        };
+        RemoteExtra { tracked: self.tracked, raw }
+    }
+
     /// The inbox entry, or None for anything the inbox cannot hold (another
     /// platform, an unknown kind, no id).
     pub fn into_entry(self) -> Option<MentionEntry> {
@@ -222,9 +258,119 @@ pub struct Pending {
     pub next: i64,
     #[serde(default)]
     pub more: bool,
+    /// The watcher's own record is behind (slice B): remote pins are held and
+    /// no new one starts.
+    #[serde(default)]
+    pub watcher_stale: bool,
+    /// Mentions a moderator deleted since (slice B): they leave the inbox and
+    /// their pins go.
+    #[serde(default)]
+    pub removed: Vec<String>,
+    /// Mentions whose tracking the server confirmed lost (slice B): their pins end.
+    #[serde(default)]
+    pub untracked: Vec<String>,
+}
+
+/// A mention the server found that may start pinning here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteCandidate {
+    pub entry: MentionEntry,
+    /// The local time it was said (the server's time less this machine's clock skew).
+    pub at_local: i64,
+    pub raw: crate::services::mention_pin_row::RemoteRaw,
+}
+
+/// `at_local = at_ms - (date_header_ms - receive_ms)`: the server's time of a
+/// message on this machine's clock, from the `Date` header of the answer and
+/// the local time it was received.
+pub fn at_local(at_ms: i64, date_header_ms: i64, receive_ms: i64) -> i64 {
+    at_ms - (date_header_ms - receive_ms)
+}
+
+/// An HTTP `Date` header as milliseconds since the epoch.
+pub fn parse_http_date(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc2822(value.trim()).ok().map(|d| d.timestamp_millis())
+}
+
+/// JSON text with every lone surrogate escape (a half of an emoji the
+/// watcher cut a message through) rewritten to the replacement character: serde refuses the
+/// whole page for one, which stuck the cursor. Escapes are scanned with
+/// backslash parity (an escaped backslash before `ud83d` is not an escape),
+/// hex is read case-insensitively, and a valid high-then-low pair is kept.
+pub fn rewrite_lone_surrogates(json: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    let b = json.as_bytes();
+    let hex4 = |at: usize| -> Option<u32> {
+        let digits = b.get(at..at + 4)?;
+        digits.iter().try_fold(0u32, |acc, d| Some(acc * 16 + (*d as char).to_digit(16)?))
+    };
+    const REPLACEMENT: &str = "\\uFFFD";
+    let mut out: Option<String> = None;
+    let (mut i, mut copied) = (0, 0);
+    while i < b.len() {
+        if b[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        match b.get(i + 1) {
+            Some(b'u') => match hex4(i + 2) {
+                Some(0xD800..=0xDBFF) => {
+                    let low = b.get(i + 6) == Some(&b'\\')
+                        && b.get(i + 7) == Some(&b'u')
+                        && hex4(i + 8).is_some_and(|c| (0xDC00..=0xDFFF).contains(&c));
+                    if low {
+                        i += 12;
+                    } else {
+                        let o = out.get_or_insert_with(String::new);
+                        o.push_str(&json[copied..i]);
+                        o.push_str(REPLACEMENT);
+                        i += 6;
+                        copied = i;
+                    }
+                }
+                Some(0xDC00..=0xDFFF) => {
+                    let o = out.get_or_insert_with(String::new);
+                    o.push_str(&json[copied..i]);
+                    o.push_str(REPLACEMENT);
+                    i += 6;
+                    copied = i;
+                }
+                Some(_) => i += 6,
+                None => i += 2,
+            },
+            Some(_) => i += 2,
+            None => i += 1,
+        }
+    }
+    match out {
+        Some(mut o) => {
+            o.push_str(&json[copied..]);
+            Cow::Owned(o)
+        }
+        None => Cow::Borrowed(json),
+    }
 }
 
 impl Pending {
+    /// The mentions of this page that may start pinning: only from an answer
+    /// whose watcher is current, only the ones it tracked, only with the raw
+    /// body and tags a row is built from.
+    pub fn remote_candidates(&self, date_header_ms: i64, receive_ms: i64) -> Vec<RemoteCandidate> {
+        if self.watcher_stale {
+            return Vec::new();
+        }
+        self.entries
+            .iter()
+            .filter_map(|v| serde_json::from_value::<RemoteMention>(v.clone()).ok())
+            .filter_map(|m| {
+                let extra = m.extra();
+                let entry = m.into_entry()?;
+                let raw = extra.raw.filter(|_| extra.tracked)?;
+                Some(RemoteCandidate { at_local: at_local(entry.at_ms, date_header_ms, receive_ms), entry, raw })
+            })
+            .collect()
+    }
+
     /// The entries the inbox can hold; a malformed one is left out, not fatal.
     pub fn mentions(&self) -> Vec<MentionEntry> {
         self.entries
@@ -471,7 +617,7 @@ pub mod client {
         if !inputs().away_alerts {
             return Ok(0);
         }
-        let _gate = PULL_GATE.lock().await;
+        let gate = PULL_GATE.lock().await;
         let out = pull_pages().await;
         // Only a pull that worked holds the next one off: one tried before
         // sign-in must not delay the pull sign-in starts.
@@ -480,16 +626,56 @@ pub mod client {
                 *l = Some(Instant::now());
             }
         }
-        out
+        // The gate is released before any row is built: a pull never waits
+        // on an emote table or a badge set.
+        drop(gate);
+        match out {
+            Ok((filed, candidates)) => {
+                pin_candidates(candidates).await;
+                Ok(filed)
+            }
+            Err(e) => Err(e),
+        }
     }
 
-    async fn pull_pages() -> Result<u32, String> {
+    /// Mentions the server found start pinning, one chat at a time: each row's
+    /// snapshot is built with the chat's emote table (a private one for a chat
+    /// this app never joined), then the entry is stamped and its snapshot
+    /// stored in one step. One that cannot be built still pins (its text row).
+    async fn pin_candidates(mut candidates: Vec<RemoteCandidate>) {
+        candidates.sort_by(|a, b| a.entry.room.cmp(&b.entry.room).then(a.at_local.cmp(&b.at_local)));
+        for c in candidates {
+            if !crate::services::mention_inbox::remote_pinnable(&c.entry.id, c.at_local) {
+                continue;
+            }
+            let snapshot = crate::services::mention_pin_row::remote_snapshot(&c.entry, &c.raw).await;
+            crate::services::mention_inbox::pin_remote(&c.entry.id, c.at_local, snapshot);
+        }
+    }
+
+    /// The `Date` header of an answer as milliseconds, else the receive time
+    /// (no skew known).
+    fn date_ms(resp: &reqwest::Response, receive_ms: i64) -> i64 {
+        resp.headers()
+            .get(reqwest::header::DATE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_http_date)
+            .unwrap_or(receive_ms)
+    }
+
+    async fn pull_pages() -> Result<(u32, Vec<RemoteCandidate>), String> {
         let mut cursor = crate::services::mention_inbox::remote_cursor().ok_or("not signed in")?;
         let mut filed = 0u32;
         let mut reenrolled = false;
+        let mut candidates: Vec<RemoteCandidate> = Vec::new();
         for _ in 0..MAX_PAGES {
             let resp = request(reqwest::Method::GET, &format!("/mentions/pending?since={cursor}"), None).await?;
-            let page: Pending = resp.json().await.map_err(|e| e.to_string())?;
+            let receive_ms = chrono::Utc::now().timestamp_millis();
+            let date_ms = date_ms(&resp, receive_ms);
+            // A half of an emoji the watcher cut through is not a reason to
+            // refuse the page (and stick the cursor): it reads as U+FFFD.
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            let page: Pending = serde_json::from_str(&rewrite_lone_surrogates(&text)).map_err(|e| e.to_string())?;
             if !page.enrolled {
                 // The server let the account go (14 days unseen) while the
                 // switch stayed on: opt back in, once.
@@ -500,7 +686,23 @@ pub mod client {
                 sync().await?;
                 continue;
             }
+            // The first working pull with Pin mentions on arms remote pins:
+            // what was said before it is backlog and never pins.
+            if crate::services::mention_pins::pins_on() {
+                crate::services::mention_inbox::arm_remote_pins();
+            }
             filed += crate::services::mention_inbox::merge_remote(page.mentions(), page.next).unwrap_or(0) as u32;
+            // What a moderator deleted leaves the inbox, and its pin with it;
+            // a gap the server confirmed ends the pins it covered.
+            for id in &page.removed {
+                crate::services::mention_inbox::on_message_deleted(id);
+            }
+            if !page.untracked.is_empty() {
+                crate::services::mention_inbox::end_remote_pins(&page.untracked);
+            }
+            if crate::services::mention_pins::pins_on() {
+                candidates.extend(page.remote_candidates(date_ms, receive_ms));
+            }
             cursor = cursor.max(page.next);
             if !page.more {
                 break;
@@ -509,7 +711,7 @@ pub mod client {
         if filed > 0 {
             log::info!("[MentionWatch] pulled {filed} new");
         }
-        Ok(filed)
+        Ok((filed, candidates))
     }
 
     /// The chats on screen now (room keys, from every app): each Twitch one takes
@@ -676,6 +878,116 @@ mod tests {
         assert_eq!(
             due_leases(&["hamlin".to_string()], &mut stamps, t0 + LEASE_EVERY + Duration::from_secs(1)),
             vec!["hamlin".to_string()]
+        );
+    }
+
+    /// A page from node's `JSON.stringify` of a message cut through an emoji (`\ud83d`).
+    const SURROGATE_PAGE: &str = include_str!("../../tests/fixtures/pending-lone-surrogate.json");
+
+    #[test]
+    fn a_lone_surrogate_escape_no_longer_refuses_the_page_and_the_entry_files() {
+        assert!(serde_json::from_str::<Pending>(SURROGATE_PAGE).is_err(), "serde refuses the raw page: that stuck the cursor");
+        let fixed = rewrite_lone_surrogates(SURROGATE_PAGE);
+        let page: Pending = serde_json::from_str(&fixed).expect("the rewritten page reads");
+        let mentions = page.mentions();
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions[0].text.ends_with('\u{FFFD}'), "{:?}", mentions[0].text);
+        let mut inbox = crate::services::mention_inbox::Inbox::default();
+        assert!(inbox.file(mentions.into_iter().next().unwrap(), 1_792_424_190_000));
+    }
+
+    #[test]
+    fn the_rewrite_keeps_valid_pairs_reads_hex_in_any_case_and_counts_backslashes() {
+        use std::borrow::Cow;
+        // Escapes are built from a backslash and text, never typed as one.
+        let b = "\\";
+        let esc = |hex: &str| format!("{b}u{hex}");
+        let json = |body: &str| format!("{{\"t\":\"{body}\"}}");
+        let same = |body: String| {
+            let text = json(&body);
+            assert!(matches!(rewrite_lone_surrogates(&text), Cow::Borrowed(t) if t == text), "{text}");
+        };
+        let fixed = |body: String| rewrite_lone_surrogates(&json(&body)).into_owned();
+        let fffd = esc("FFFD");
+        same("plain".into());
+        same(format!("{}{}", esc("d83d"), esc("de00"))); // a valid pair, lowercase
+        same(format!("{}{}", esc("D83D"), esc("DE00"))); // and uppercase
+        same(format!("{b}{b}ud83d")); // an escaped backslash, then plain text: no escape at all
+        same(format!("{} {b}n {b}{b}", esc("0041")));
+        assert_eq!(fixed(format!("a{}", esc("d83d"))), json(&format!("a{fffd}")));
+        assert_eq!(fixed(esc("D83D")), json(&fffd));
+        assert_eq!(fixed(format!("{} x", esc("de00"))), json(&format!("{fffd} x")));
+        assert_eq!(fixed(format!("{b}{b}{}", esc("d83d"))), json(&format!("{b}{b}{fffd}")), "an escaped backslash, then a real lone escape");
+        assert_eq!(fixed(format!("{}{}", esc("d83d"), esc("0041"))), json(&format!("{fffd}{}", esc("0041"))), "a high half before a plain escape is lone");
+        assert_eq!(
+            fixed(format!("{}{}{}", esc("de00"), esc("d83d"), esc("de00"))),
+            json(&format!("{fffd}{}{}", esc("d83d"), esc("de00"))),
+            "a lone low half, then a whole pair"
+        );
+        assert_eq!(fixed(format!("{} {}", esc("d83d"), esc("d83d"))), json(&format!("{fffd} {fffd}")));
+        // Multi-byte text around an escape is untouched.
+        assert_eq!(fixed(format!("é\u{1F600}{}", esc("d83d"))), json(&format!("é\u{1F600}{fffd}")));
+    }
+
+    #[test]
+    fn the_servers_clock_skew_moves_a_message_onto_this_machines_clock() {
+        // The server's clock runs 5 s ahead: what it stamped 100 000 was said at 95 000 here.
+        assert_eq!(at_local(100_000, 1_005_000, 1_000_000), 95_000);
+        assert_eq!(at_local(100_000, 995_000, 1_000_000), 105_000, "a server clock behind this one");
+        assert_eq!(at_local(100_000, 1_000_000, 1_000_000), 100_000);
+        assert_eq!(parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"), Some(784_111_777_000));
+        assert_eq!(parse_http_date("not a date"), None);
+    }
+
+    fn tracked_page(stale: bool) -> Pending {
+        serde_json::from_value(json!({
+            "enrolled": true, "next": 9, "more": false, "watcher_stale": stale,
+            "removed": ["gone"], "untracked": ["lost"],
+            "entries": [
+                { "id": "t1", "room": "xqc", "kind": "mention", "sender_id": "1", "sender_login": "a", "text": "hi", "at_ms": 100_000i64,
+                  "tracked": true, "body_raw": "hi @you", "tags_raw": "id=t1;room-id=5" },
+                { "id": "t2", "room": "xqc", "kind": "mention", "sender_id": "1", "sender_login": "a", "text": "hi", "at_ms": 100_000i64,
+                  "tracked": false, "body_raw": "hi @you", "tags_raw": "id=t2" },
+                { "id": "t3", "room": "xqc", "kind": "mention", "sender_id": "1", "sender_login": "a", "text": "hi", "at_ms": 100_000i64,
+                  "tracked": true },
+                { "id": "t4", "room": "xqc", "kind": "reply", "sender_id": "1", "sender_login": "a", "text": "hi", "at_ms": 100_000i64,
+                  "tracked": true, "body_raw": "", "tags_raw": "id=t4" }
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_tracked_entries_with_their_raw_body_and_tags_may_pin_and_a_stale_watcher_blocks_new_ones() {
+        let page = tracked_page(false);
+        let found = page.remote_candidates(1_005_000, 1_000_000);
+        assert_eq!(found.iter().map(|c| c.entry.id.as_str()).collect::<Vec<_>>(), vec!["t1"], "untracked, rawless and empty-body ones never pin");
+        assert_eq!(found[0].at_local, 95_000, "the skew is applied");
+        assert_eq!(found[0].raw.body_raw, "hi @you");
+        // All four still file as entries; the pins are what the gate holds back.
+        assert_eq!(page.mentions().len(), 4);
+        assert_eq!((page.removed.as_slice(), page.untracked.as_slice()), (&["gone".to_string()][..], &["lost".to_string()][..]));
+        let stale = tracked_page(true);
+        assert!(stale.watcher_stale && stale.remote_candidates(1_005_000, 1_000_000).is_empty(), "a stale watcher holds remote pins and blocks new ones");
+        assert_eq!(stale.mentions().len(), 4, "entries still file while the watcher is stale");
+        // An older server that sends none of it parses as before.
+        let old: Pending = serde_json::from_value(pending_json()).unwrap();
+        assert!(!old.watcher_stale && old.removed.is_empty() && old.remote_candidates(0, 0).is_empty());
+    }
+
+    #[test]
+    fn the_pull_reads_the_date_header_the_page_through_the_rewrite_and_builds_rows_after_the_gate() {
+        let src = include_str!("mention_watch.rs");
+        let pull = &src[src.find("pub async fn pull() ").unwrap()..];
+        let pull = &pull[..pull.find("async fn pin_candidates").unwrap()];
+        let (gate, build) = (pull.find("drop(gate)").unwrap(), pull.find("pin_candidates(candidates)").unwrap());
+        assert!(gate < build, "snapshots are built after PULL_GATE is released");
+        let pages = &src[src.find("async fn pull_pages").unwrap()..];
+        let pages = &pages[..pages.find("pub fn lease_rooms").unwrap()];
+        assert!(pages.contains("rewrite_lone_surrogates(&text)") && pages.contains("date_ms(&resp, receive_ms)"));
+        assert!(
+            pages.find("arm_remote_pins()").unwrap() < pages.find("remote_candidates(").unwrap(),
+            "the arming comes before any candidate"
         );
     }
 

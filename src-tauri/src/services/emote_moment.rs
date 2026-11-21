@@ -402,6 +402,7 @@ mod tests {
             provider: "twitch".into(),
             channel: "#test".into(),
             received_at_ms: None,
+            badges_resolved: false,
             emotes: vec![],
             tags: HashMap::new(),
             layout: Default::default(),

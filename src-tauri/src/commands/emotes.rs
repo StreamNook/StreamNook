@@ -940,6 +940,7 @@ mod tests {
             segments,
             metadata,
             received_at_ms: None,
+            badges_resolved: false,
         }
     }
 

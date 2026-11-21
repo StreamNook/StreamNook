@@ -106,6 +106,15 @@ pub(crate) fn lookup_for(home: &str, room_id: &str, raw: &str) -> Option<Arc<Emo
     None
 }
 
+/// The partner room's table when it is whole, read with no side effect: no
+/// home is registered, no row is queued for a re-stamp and no fetch starts
+/// (what a pinned mention rebuilt for a chat it may not show needs).
+pub(crate) fn peek_lookup(room_id: &str) -> Option<Arc<EmoteLookup>> {
+    let map = rooms().lock().ok()?;
+    let room = map.get(room_id)?;
+    if room.whole { room.lookup.clone() } else { None }
+}
+
 /// Makes room for one more room: drops the least recently used room that is
 /// not mid-fetch.
 fn evict_for_new_room(map: &mut HashMap<String, Room>) {

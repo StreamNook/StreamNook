@@ -1,0 +1,4451 @@
+{
+  "badges": {
+    "global": [
+      {
+        "set": "premium",
+        "title": "Prime Gaming",
+        "version": "1",
+        "x1": "https://badges.test/premium/1/1",
+        "x2": "https://badges.test/premium/1/2",
+        "x4": "https://badges.test/premium/1/4"
+      },
+      {
+        "set": "moderator",
+        "title": "Moderator",
+        "version": "1",
+        "x1": "https://badges.test/moderator/1/1",
+        "x2": "https://badges.test/moderator/1/2",
+        "x4": "https://badges.test/moderator/1/4"
+      }
+    ],
+    "partner": [
+      {
+        "set": "subscriber",
+        "title": "Partner 3-Month Subscriber",
+        "version": "3",
+        "x1": "https://badges.test/subscriber/3/1",
+        "x2": "https://badges.test/subscriber/3/2",
+        "x4": "https://badges.test/subscriber/3/4"
+      }
+    ],
+    "room": [
+      {
+        "set": "subscriber",
+        "title": "1-Year Subscriber",
+        "version": "12",
+        "x1": "https://badges.test/subscriber/12/1",
+        "x2": "https://badges.test/subscriber/12/2",
+        "x4": "https://badges.test/subscriber/12/4"
+      },
+      {
+        "set": "subscriber",
+        "title": "Subscriber",
+        "version": "0",
+        "x1": "https://badges.test/subscriber/0/1",
+        "x2": "https://badges.test/subscriber/0/2",
+        "x4": "https://badges.test/subscriber/0/4"
+      },
+      {
+        "set": "bits",
+        "title": "cheer 100",
+        "version": "100",
+        "x1": "https://badges.test/bits/100/1",
+        "x2": "https://badges.test/bits/100/2",
+        "x4": "https://badges.test/bits/100/4"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/subscriber/12/1",
+            "image_url_2x": "https://badges.test/subscriber/12/2",
+            "image_url_4x": "https://badges.test/subscriber/12/4",
+            "name": "subscriber",
+            "title": "1-Year Subscriber",
+            "version": "12"
+          },
+          {
+            "image_url_1x": "https://badges.test/premium/1/1",
+            "image_url_2x": "https://badges.test/premium/1/2",
+            "image_url_4x": "https://badges.test/premium/1/4",
+            "name": "premium",
+            "title": "Prime Gaming",
+            "version": "1"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "hey @streamer nice stream https://example.com/a",
+        "display_name": "Viewer",
+        "id": "pin-tw-1",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "title": "1-Year Subscriber",
+                "url": "https://badges.test/subscriber/12/2"
+              },
+              {
+                "provider": "twitch",
+                "title": "Prime Gaming",
+                "url": "https://badges.test/premium/1/2"
+              }
+            ],
+            "name_color": "#359bff",
+            "spans": [
+              {
+                "text": "hey ",
+                "type": "text"
+              },
+              {
+                "login": "streamer",
+                "text": "@streamer",
+                "type": "mention"
+              },
+              {
+                "text": " nice stream ",
+                "type": "text"
+              },
+              {
+                "label": "example.com/a",
+                "type": "link",
+                "url": "https://example.com/a"
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "hey",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "@streamer",
+            "login": "streamer",
+            "type": "mention"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "nice",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "stream",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "https://example.com/a",
+            "label": "example.com/a",
+            "type": "link",
+            "url": "https://example.com/a"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "subscriber/12,premium/1",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "",
+          "first-msg": "0",
+          "flags": "",
+          "id": "pin-tw-1",
+          "mod": "0",
+          "room-id": "424242",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "twitch",
+      "name": "twitch_plain",
+      "raw": "@badge-info=subscriber/14;badges=subscriber/12,premium/1;color=#1E90FF;display-name=Viewer;emotes=;first-msg=0;flags=;id=pin-tw-1;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type= :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #fixroom :hey @streamer nice stream https://example.com/a"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/moderator/1/1",
+            "image_url_2x": "https://badges.test/moderator/1/2",
+            "image_url_4x": "https://badges.test/moderator/1/4",
+            "name": "moderator",
+            "title": "Moderator",
+            "version": "1"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "Kappa fixWave fixHat fixBttv done",
+        "display_name": "Viewer",
+        "id": "pin-tw-2",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "role": true,
+                "title": "Moderator",
+                "url": "https://badges.test/moderator/1/2"
+              }
+            ],
+            "name_color": "#359bff",
+            "spans": [
+              {
+                "code": "Kappa",
+                "credit": "twitch",
+                "height": 28,
+                "id": "25",
+                "type": "emote",
+                "url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0",
+                "width": 28
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "overlays": [
+                  {
+                    "code": "fixHat",
+                    "url": "https://cdn.7tv.app/emote/s2/2x.webp"
+                  }
+                ],
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixBttv",
+                "height": 28,
+                "type": "emote",
+                "url": "https://cdn.betterttv.net/emote/b1/2x.webp",
+                "width": 28
+              },
+              {
+                "text": " done",
+                "type": "text"
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "Kappa",
+            "emote_id": "25",
+            "emote_url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixHat",
+            "emote_id": "s2",
+            "emote_url": "https://cdn.7tv.app/emote/s2/2x.webp",
+            "is_zero_width": true,
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixBttv",
+            "emote_id": "b1",
+            "emote_url": "https://cdn.betterttv.net/emote/b1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "done",
+            "type": "text"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "moderator/1",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "25:0-4",
+          "first-msg": "0",
+          "flags": "",
+          "id": "pin-tw-2",
+          "mod": "0",
+          "room-id": "424242",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "twitch",
+      "name": "twitch_emotes_with_zero_width",
+      "raw": "@badge-info=subscriber/14;badges=moderator/1;color=#1E90FF;display-name=Viewer;emotes=25:0-4;first-msg=0;flags=;id=pin-tw-2;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type= :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #fixroom :Kappa fixWave fixHat fixBttv done"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/subscriber/12/1",
+            "image_url_2x": "https://badges.test/subscriber/12/2",
+            "image_url_4x": "https://badges.test/subscriber/12/4",
+            "name": "subscriber",
+            "title": "1-Year Subscriber",
+            "version": "12"
+          },
+          {
+            "image_url_1x": "https://badges.test/premium/1/1",
+            "image_url_2x": "https://badges.test/premium/1/2",
+            "image_url_4x": "https://badges.test/premium/1/4",
+            "name": "premium",
+            "title": "Prime Gaming",
+            "version": "1"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "yes fixWave Kappa",
+        "display_name": "Viewer",
+        "id": "pin-tw-3",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "reply_info": {
+            "parent_display_name": "Streamer",
+            "parent_msg_body": "did you see fixWave",
+            "parent_msg_id": "parent-1",
+            "parent_segments": [
+              {
+                "content": "did",
+                "type": "text"
+              },
+              {
+                "content": " ",
+                "type": "text"
+              },
+              {
+                "content": "you",
+                "type": "text"
+              },
+              {
+                "content": " ",
+                "type": "text"
+              },
+              {
+                "content": "see",
+                "type": "text"
+              },
+              {
+                "content": " ",
+                "type": "text"
+              },
+              {
+                "content": "fixWave",
+                "emote_id": "s1",
+                "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+                "type": "emote"
+              }
+            ],
+            "parent_user_id": "1",
+            "parent_user_login": "streamer"
+          },
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "title": "1-Year Subscriber",
+                "url": "https://badges.test/subscriber/12/2"
+              },
+              {
+                "provider": "twitch",
+                "title": "Prime Gaming",
+                "url": "https://badges.test/premium/1/2"
+              }
+            ],
+            "name_color": "#359bff",
+            "parent_spans": [
+              {
+                "text": "did you see ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              }
+            ],
+            "spans": [
+              {
+                "text": "yes ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "Kappa",
+                "credit": "twitch",
+                "height": 28,
+                "id": "25",
+                "type": "emote",
+                "url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0",
+                "width": 28
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "yes",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "Kappa",
+            "emote_id": "25",
+            "emote_url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "subscriber/12,premium/1",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "25:22-26",
+          "first-msg": "0",
+          "flags": "",
+          "id": "pin-tw-3",
+          "mod": "0",
+          "reply-parent-display-name": "Streamer",
+          "reply-parent-msg-body": "did you see fixWave",
+          "reply-parent-msg-id": "parent-1",
+          "reply-parent-user-id": "1",
+          "reply-parent-user-login": "streamer",
+          "reply-thread-parent-msg-id": "parent-1",
+          "room-id": "424242",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "twitch",
+      "name": "twitch_reply_with_parent_offsets",
+      "raw": "@badge-info=subscriber/14;badges=subscriber/12,premium/1;color=#1E90FF;display-name=Viewer;emotes=25:22-26;first-msg=0;flags=;id=pin-tw-3;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type=;reply-parent-display-name=Streamer;reply-parent-msg-body=did\\syou\\ssee\\sfixWave;reply-parent-msg-id=parent-1;reply-parent-user-id=1;reply-parent-user-login=streamer;reply-thread-parent-msg-id=parent-1 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #fixroom :@Streamer yes fixWave Kappa"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/subscriber/12/1",
+            "image_url_2x": "https://badges.test/subscriber/12/2",
+            "image_url_4x": "https://badges.test/subscriber/12/4",
+            "name": "subscriber",
+            "title": "1-Year Subscriber",
+            "version": "12"
+          },
+          {
+            "image_url_1x": "https://badges.test/premium/1/1",
+            "image_url_2x": "https://badges.test/premium/1/2",
+            "image_url_4x": "https://badges.test/premium/1/4",
+            "name": "premium",
+            "title": "Prime Gaming",
+            "version": "1"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "waves fixWave",
+        "display_name": "Viewer",
+        "id": "pin-tw-4",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": true,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "title": "1-Year Subscriber",
+                "url": "https://badges.test/subscriber/12/2"
+              },
+              {
+                "provider": "twitch",
+                "title": "Prime Gaming",
+                "url": "https://badges.test/premium/1/2"
+              }
+            ],
+            "name_color": "#359bff",
+            "spans": [
+              {
+                "text": "waves ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "waves",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "subscriber/12,premium/1",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "",
+          "first-msg": "0",
+          "flags": "",
+          "id": "pin-tw-4",
+          "mod": "0",
+          "room-id": "424242",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "twitch",
+      "name": "twitch_me_action",
+      "raw": "@badge-info=subscriber/14;badges=subscriber/12,premium/1;color=#1E90FF;display-name=Viewer;emotes=;first-msg=0;flags=;id=pin-tw-4;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type= :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #fixroom :\u0001ACTION waves fixWave\u0001"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/bits/100/1",
+            "image_url_2x": "https://badges.test/bits/100/2",
+            "image_url_4x": "https://badges.test/bits/100/4",
+            "name": "bits",
+            "title": "cheer 100",
+            "version": "100"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "Cheer100 thanks fixBttv",
+        "display_name": "Viewer",
+        "id": "pin-tw-5",
+        "metadata": {
+          "bits_amount": 100,
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "title": "cheer 100",
+                "url": "https://badges.test/bits/100/2"
+              }
+            ],
+            "event": "twitch:cheer",
+            "name_color": "#359bff",
+            "spans": [
+              {
+                "bits": 100,
+                "color": "#9c3ee8",
+                "text": "Cheer100",
+                "type": "cheer",
+                "url": "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif"
+              },
+              {
+                "text": " thanks ",
+                "type": "text"
+              },
+              {
+                "code": "fixBttv",
+                "height": 28,
+                "type": "emote",
+                "url": "https://cdn.betterttv.net/emote/b1/2x.webp",
+                "width": 28
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "bits": 100,
+            "cheermote_url": "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif",
+            "color": "#9c3ee8",
+            "content": "Cheer100",
+            "prefix": "cheer",
+            "tier": "100",
+            "type": "cheermote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "thanks",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixBttv",
+            "emote_id": "b1",
+            "emote_url": "https://cdn.betterttv.net/emote/b1/2x.webp",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "bits/100",
+          "bits": "100",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "",
+          "first-msg": "0",
+          "flags": "",
+          "id": "pin-tw-5",
+          "mod": "0",
+          "room-id": "424242",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "twitch",
+      "name": "twitch_bits",
+      "raw": "@badge-info=subscriber/14;badges=bits/100;color=#1E90FF;display-name=Viewer;emotes=;first-msg=0;flags=;id=pin-tw-5;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type=;bits=100 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #fixroom :Cheer100 thanks fixBttv"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/subscriber/3/1",
+            "image_url_2x": "https://badges.test/subscriber/3/2",
+            "image_url_4x": "https://badges.test/subscriber/3/4",
+            "name": "subscriber",
+            "title": "Partner 3-Month Subscriber",
+            "version": "3"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "hello from the other side fixWave",
+        "display_name": "Viewer",
+        "id": "pin-tw-6",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": true,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "source_room_id": "999",
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "title": "Partner 3-Month Subscriber",
+                "url": "https://badges.test/subscriber/3/2"
+              }
+            ],
+            "name_color": "#359bff",
+            "spans": [
+              {
+                "text": "hello from the other side ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "hello",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "from",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "the",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "other",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "side",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "",
+          "first-msg": "0",
+          "flags": "",
+          "id": "pin-tw-6",
+          "mod": "0",
+          "room-id": "424242",
+          "source-badge-info": "subscriber/3",
+          "source-badges": "subscriber/3",
+          "source-room-id": "999",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "twitch",
+      "name": "twitch_shared_chat_source_room",
+      "raw": "@badge-info=subscriber/14;badges=;color=#1E90FF;display-name=Viewer;emotes=;first-msg=0;flags=;id=pin-tw-6;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type=;source-room-id=999;source-badges=subscriber/3;source-badge-info=subscriber/3 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #fixroom :hello from the other side fixWave"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#9ACD32",
+        "content": "",
+        "display_name": "Gifter",
+        "id": "pin-tw-7",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "msg_type": "subgift",
+          "rules_evaluated": false,
+          "system_message": "Gifter gifted a Tier 1 sub to Me!",
+          "view": {
+            "event": "twitch:gift",
+            "name_color": "#9acd32",
+            "spans": []
+          }
+        },
+        "provider": "twitch",
+        "segments": [],
+        "tags": {
+          "badge-info": "",
+          "badges": "",
+          "color": "#9ACD32",
+          "display-name": "Gifter",
+          "emotes": "",
+          "flags": "",
+          "id": "pin-tw-7",
+          "login": "gifter",
+          "mod": "0",
+          "msg-id": "subgift",
+          "msg-param-months": "1",
+          "msg-param-origin-id": "da 39",
+          "msg-param-recipient-display-name": "Me",
+          "msg-param-recipient-id": "1",
+          "msg-param-recipient-user-name": "me",
+          "msg-param-sender-count": "0",
+          "msg-param-sub-plan": "1000",
+          "msg-param-sub-plan-name": "Channel Subscription",
+          "room-id": "424242",
+          "subscriber": "0",
+          "system-msg": "Gifter gifted a Tier 1 sub to Me!",
+          "tmi-sent-ts": "1700000000000",
+          "user-id": "888",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "888",
+        "username": "gifter"
+      },
+      "kind": "twitch",
+      "name": "twitch_gift_notice",
+      "raw": "@badge-info=;badges=;color=#9ACD32;display-name=Gifter;emotes=;flags=;id=pin-tw-7;login=gifter;mod=0;msg-id=subgift;msg-param-months=1;msg-param-origin-id=da\\s39;msg-param-recipient-display-name=Me;msg-param-recipient-id=1;msg-param-recipient-user-name=me;msg-param-sender-count=0;msg-param-sub-plan-name=Channel\\sSubscription;msg-param-sub-plan=1000;room-id=424242;subscriber=0;system-msg=Gifter\\sgifted\\sa\\sTier\\s1\\ssub\\sto\\sMe!;tmi-sent-ts=1700000000000;user-id=888;user-type= :tmi.twitch.tv USERNOTICE #fixroom"
+    },
+    {
+      "expect_snapshot": "lean",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/subscriber/12/1",
+            "image_url_2x": "https://badges.test/subscriber/12/2",
+            "image_url_4x": "https://badges.test/subscriber/12/4",
+            "name": "subscriber",
+            "title": "1-Year Subscriber",
+            "version": "12"
+          },
+          {
+            "image_url_1x": "https://badges.test/premium/1/1",
+            "image_url_2x": "https://badges.test/premium/1/2",
+            "image_url_4x": "https://badges.test/premium/1/4",
+            "name": "premium",
+            "title": "Prime Gaming",
+            "version": "1"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave",
+        "display_name": "Viewer",
+        "id": "pin-tw-8",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "title": "1-Year Subscriber",
+                "url": "https://badges.test/subscriber/12/2"
+              },
+              {
+                "provider": "twitch",
+                "title": "Prime Gaming",
+                "url": "https://badges.test/premium/1/2"
+              }
+            ],
+            "name_color": "#359bff",
+            "spans": [
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "subscriber/12,premium/1",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "",
+          "first-msg": "0",
+          "flags": "",
+          "id": "pin-tw-8",
+          "mod": "0",
+          "room-id": "424242",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "twitch",
+      "name": "twitch_oversize_goes_lean",
+      "raw": "@badge-info=subscriber/14;badges=subscriber/12,premium/1;color=#1E90FF;display-name=Viewer;emotes=;first-msg=0;flags=;id=pin-tw-8;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type= :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #fixroom :fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave fixWave"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://files.kick.com/badges/sub3.png",
+            "name": "subscriber",
+            "title": "Subscriber",
+            "version": "3"
+          },
+          {
+            "name": "moderator",
+            "title": "Moderator",
+            "version": "1"
+          }
+        ],
+        "channel": "kick:fixslug",
+        "color": "#FF4500",
+        "content": "hi @streamer catJAM",
+        "display_name": "Fan",
+        "id": "pin-kick-1",
+        "metadata": {
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "kick",
+                "title": "Subscriber",
+                "url": "https://files.kick.com/badges/sub3.png"
+              },
+              {
+                "provider": "kick",
+                "role": true,
+                "title": "Moderator",
+                "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAYAAABV7bNHAAAABmJLR0QA/wD/AP+gvaeTAAAJBklEQVR4nNWcfVATdxrHn91lNUzxDZGKUzDyZq/2Or0Z9VTuep0etVPp3dhaQI9KMOEEwXCK1zl7EQyGSrUcjMAVpOQFbEeIN6Tn4N3Q1j86F60O4830nFMRDg1oCEWtvFkg2ez9kQTzskl2N7tJ+P737Mv3+eXDb5/9vSQgAAAqVVF8z6KX9d1R6fEGSEAIwAAQcBXXcRh6YkDAahgk3xy7OPiLx99t2bWrwYioVEXxjbF77vRg6zEuk9GKw9jz5+Ye4sD9tgS0Z9HL+h50PQYkRSL3Y1zHYex5Fd+A6Re/dBlJ/MeAdQDWPGUYjL/yPOlJSeQAiWAXLCSBYD4v5CLZfISEAQEoAVhoHoV58LgRgEGEywnE7UJ3uv6uYRln/agbf/X7S4cIDH+ufeVvZJfwLfTbxXO7IwDoXchZg91i8cSZEdX23JVae6ytGa2Len7S2C3YupCznAF4oKF8FMSTNjjOp7JKlY8kt7Sr3pj+aobTnCw90GAmc5Z43BOOQzZIHWEBCQ1mMkcsGdeYVO9Qw3Eoq1T5SNJ/Nv6VWb2Zi5xs70HpXshFMgAAyZjGpNyxJ47CyUNZJerR3w117A7l2415DQogmWRcY1K+Sw+OQ3gU/AsFa8iGAOxqEItkbOAAANxGErusjo4eAkjsaxCDZOLx1hE2cAAAls3+cF0A0+zbFSCkwGoQjWTi8dYRVWaez4LsS4dzFSL5/eNtoYIUeA3ykUw8ERgchw7nKkRHQwSJmxpEkUw8rjFxAcehD3IVovKhj9oXwOzcMZS0gtBqIJOsAyQGBC+QuKtBTrF4QmNSZbGrOb7057yKXfKh4+0CmAbJY42pqffAq3fThej/0pNQ5S3p+v0PT99ZQM663hQgJATOk66XBLjEIJ7QmFTZ3MNxVvMn0l/tLar/hurcidYjKln80T0WxHWayXapxBMQGzN7LB7XmFQ7+YVDR2KdxqRaInqWi/UkzyINwOrx2j71xVQ4wAEAWP/gu3IA4KQmURdpFmavPLhcT+ESEsUsuafEwT6FCxCS9yLN0Gwy4pm1FA4hkWVsSYzFeakrAEi+B4oMzM6szNnefKpoC4VD0DWIrawiSbeCwhKS/4EiTbM+NBk5taZIH2pI2pqDkX+Py9jtaJeLWMT0Boo0zf6LrQs5pJHFEcX/XvAz1zVtZ3FWgwKAVJ34B31j7f7XKBx4lzT/42q5oZKzaQkCXzAcKNK5BgFYa+0lJUPqhqWWJ+dvLE2qQ4EkanIP/pTCjRd9qC47eyxBtnMGnq79sxkXIaAjyWBtyJU8bOir2y1NpXDjRVWqI60VCbLcaUTgs12+4qAu2tct359S2lp7ncKNF30grhSVGY63L4QZQICEBGIQFpKu+wD8LZixuYcEqFlx4MVgQpJJFLvkA5VtNf2HKwa3rkYa+w9tem3qG9cZrc8apAtwssrmHgSg5EHD7bpcaUgGly01kuhzyVnG7iinzUl7u9zjoC7aO8dNMXtT/1pXlEPhxrvyS5WPsu+2x6dPXvTbk4K2aO8c46QZyoYqO4tLPvmcwikoEpeoR3f2n417Y/JLn5uTQVm0d45x0gzl9xSdZQWKHRQOQZWjJ22c7iFcTtCei3EMCSfNUD6o6CwrDD0ch8Ql6tHfGrv+xn4uxhEk22Ol6CwrCh84DllRNBIAeKxBfiA54JSHIRxV7b7Ec3E73po74PZZuPuikntsP4aDHU5x+MFRNxYKlfE5vdcXvOhZauyfhdsa5BazhaPVZmIfNbzfwOQeplLV7ktsjhf16wVpEb6eAO5rkD22wTnGCs6FmYzhw4kni6Waul4m99KVurZQqErK6f1WsOnpt1e9QOKlBuGkGWSGY53lxZWs4LRGi1YACVAfK03lGpK6tlDYkvRenz6SoudQQOJ84xAHM8gGj3XKpczhdDngOHlyCUldVShsSXyv71JkGu0FNU5rEE4GAGc6Y7htma3nuOfgApK6Kk/Y8oIdDoPPhYK7Aug5R4YUOlZwfswYbnPrOe456mOlqX9qOXGVibdDTScLUk7/ZG8/k57jvUgzuNkhnDTDkaEK3VGp4h16TbbJBQ6NnNFTo3om/gA2OJpU0c0rkZs9f49CI0bgnH25g+UyBg5mkN2r0MmlH7KHQyNnFDkJk28tomqlV7nAoZGDKg5o4xAnA4TjpeZQxZNIFJyq3i+lm6PpZEGKJkV084qAXc9xiPXGoe1txRLOEzschg0+nbzvVPNffu93S6npZEGKJtmt57CExGrj0Pa2qtDJDzCDAwDQPbF10AWOnwY6xzfwF5Dq5D/qGz8u9LqlpK7KE55J3n2Dbc1xjxlvHOJgBpmBHRyJ8tP7ypj8Vf5y+IpvR6QitakHv6aCpK7KE7aszWc0zqE/DqIByTZCrtDJS1nCWW6H4yMHI0hVTyGpq/KELan5fZcEaW7fnKLn6S1GQEtv0X6u5jCEo9VmYhemMoyty0Sx/nLQaYdzvJowkNnDHdfASpjPr3p70y38ecTr9TQ93WMEOvxvHOIIOzgAAJJP7Y/VPP0Fot8aNFdzAoHjJwdlzOYeHjx9LphFIBaQ3a3Qyd9n8Sqf2GZULsuLdTlBkSPov3JkeI/PcVDRSP1NtnDaHHBC8Ffn0tPrOOhZqwnWDX27mcLaq7TaTKzr8TZj21KKnhNIzIUHS0+vNWjj1JUnBSfOjVHYUmoOznKOek6YQPI6DnrG8sTtaxDepdVmYl0/bDO2RXPcc8IAktcadF/wXBSFlYe02kys6xGPPSfEkLzWoCuCzXh9eUE2hdWc5uDE8NxzQgjJaw0yAw4dSTmftcgzoymsXHtOMD5AiCD5nIvpBb+MaE489H11edEh51P15QXZLZN7puYeK5rJ5iMkBM7Sm4ulWG6TceZhy0M8OuImvg6Z+x1pKKYMQZyWeALiMdm8ywEAKEYSnkfnw6MQhBwYEICuJgxkqF+l4ZpjzewdEv31g38OBiMZb5485kgf/dKAvjSm37Jh5irBdzJePXnIsXHqKrHh3rU0BACgXr5z1X8Wp12+uOLNBAMmRDz+ZRfA/CiqAebAgACh5S75+ki3YYPxWppErjL+Hy5h66U1fymZAAAAAElFTkSuQmCC"
+              }
+            ],
+            "name_color": "#ff581a",
+            "spans": [
+              {
+                "text": "hi ",
+                "type": "text"
+              },
+              {
+                "login": "streamer",
+                "text": "@streamer",
+                "type": "mention"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "catJAM",
+                "type": "emote",
+                "url": "https://files.kick.com/emotes/k1/fullsize"
+              }
+            ]
+          }
+        },
+        "provider": "kick",
+        "segments": [
+          {
+            "content": "hi ",
+            "type": "text"
+          },
+          {
+            "content": "@streamer",
+            "login": "streamer",
+            "type": "mention"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "id": "pin-kick-1",
+          "sn-extra": "kept",
+          "user-id": "501"
+        },
+        "timestamp": "2026-11-21T10:00:00Z",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "kind": "message",
+      "message": {
+        "badges": [
+          {
+            "image_url_1x": "https://files.kick.com/badges/sub3.png",
+            "name": "subscriber",
+            "title": "Subscriber",
+            "version": "3"
+          },
+          {
+            "name": "moderator",
+            "title": "Moderator",
+            "version": "1"
+          }
+        ],
+        "channel": "kick:fixslug",
+        "color": "#FF4500",
+        "content": "hi @streamer catJAM",
+        "display_name": "Fan",
+        "id": "pin-kick-1",
+        "metadata": {},
+        "provider": "kick",
+        "segments": [
+          {
+            "content": "hi ",
+            "type": "text"
+          },
+          {
+            "content": "@streamer",
+            "login": "streamer",
+            "type": "mention"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "id": "pin-kick-1",
+          "sn-extra": "kept",
+          "user-id": "501"
+        },
+        "timestamp": "2026-11-21T10:00:00Z",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "name": "kick_row"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://yt3.ggpht.com/member6=s32",
+            "name": "member",
+            "title": "Member (6 months)",
+            "version": "6"
+          }
+        ],
+        "channel": "youtube:UC123",
+        "color": "#FF4500",
+        "content": "great stream",
+        "display_name": "Fan",
+        "id": "pin-yt-1",
+        "metadata": {
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "youtube",
+                "title": "Member (6 months)",
+                "url": "https://yt3.ggpht.com/member6=s32"
+              }
+            ],
+            "name_color": "#ff581a",
+            "spans": [
+              {
+                "text": "great stream",
+                "type": "text"
+              }
+            ]
+          }
+        },
+        "provider": "youtube",
+        "segments": [
+          {
+            "content": "great stream",
+            "type": "text"
+          }
+        ],
+        "tags": {
+          "id": "pin-yt-1",
+          "sn-extra": "kept",
+          "user-id": "501"
+        },
+        "timestamp": "2026-11-21T10:00:00Z",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "kind": "message",
+      "message": {
+        "badges": [
+          {
+            "image_url_1x": "https://yt3.ggpht.com/member6=s32",
+            "name": "member",
+            "title": "Member (6 months)",
+            "version": "6"
+          }
+        ],
+        "channel": "youtube:UC123",
+        "color": "#FF4500",
+        "content": "great stream",
+        "display_name": "Fan",
+        "id": "pin-yt-1",
+        "metadata": {},
+        "provider": "youtube",
+        "segments": [
+          {
+            "content": "great stream",
+            "type": "text"
+          }
+        ],
+        "tags": {
+          "id": "pin-yt-1",
+          "sn-extra": "kept",
+          "user-id": "501"
+        },
+        "timestamp": "2026-11-21T10:00:00Z",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "name": "youtube_row"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://p16.tiktokcdn.com/badge1.png",
+            "name": "tiktok",
+            "title": "Fan club",
+            "version": "1"
+          }
+        ],
+        "channel": "tiktok:fixuser",
+        "color": "#FF4500",
+        "content": "hello",
+        "display_name": "Fan",
+        "id": "pin-tt-1",
+        "metadata": {
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "tiktok",
+                "title": "Fan club",
+                "url": "https://p16.tiktokcdn.com/badge1.png"
+              }
+            ],
+            "name_color": "#ff581a",
+            "spans": [
+              {
+                "text": "hello",
+                "type": "text"
+              }
+            ]
+          }
+        },
+        "provider": "tiktok",
+        "segments": [
+          {
+            "content": "hello",
+            "type": "text"
+          }
+        ],
+        "tags": {
+          "id": "pin-tt-1",
+          "sn-extra": "kept",
+          "user-id": "501"
+        },
+        "timestamp": "2026-11-21T10:00:00Z",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "kind": "message",
+      "message": {
+        "badges": [
+          {
+            "image_url_1x": "https://p16.tiktokcdn.com/badge1.png",
+            "name": "tiktok",
+            "title": "Fan club",
+            "version": "1"
+          }
+        ],
+        "channel": "tiktok:fixuser",
+        "color": "#FF4500",
+        "content": "hello",
+        "display_name": "Fan",
+        "id": "pin-tt-1",
+        "metadata": {},
+        "provider": "tiktok",
+        "segments": [
+          {
+            "content": "hello",
+            "type": "text"
+          }
+        ],
+        "tags": {
+          "id": "pin-tt-1",
+          "sn-extra": "kept",
+          "user-id": "501"
+        },
+        "timestamp": "2026-11-21T10:00:00Z",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "name": "tiktok_row"
+    },
+    {
+      "expect_snapshot": "none",
+      "golden": {
+        "badges": [],
+        "channel": "fixslug",
+        "color": "#FF4500",
+        "content": "spam",
+        "display_name": "Fan",
+        "id": "pin-kick-2",
+        "metadata": {},
+        "provider": "kick",
+        "segments": [
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=0",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=1",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=2",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=3",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=4",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=5",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=6",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=7",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=8",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=9",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=10",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=11",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=12",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=13",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=14",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=15",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=16",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=17",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=18",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=19",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=20",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=21",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=22",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=23",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=24",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=25",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=26",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=27",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=28",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=29",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=30",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=31",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=32",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=33",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=34",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=35",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=36",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=37",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=38",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=39",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=40",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=41",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=42",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=43",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=44",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=45",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=46",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=47",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=48",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=49",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=50",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=51",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=52",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=53",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=54",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=55",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=56",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=57",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=58",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=59",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=60",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=61",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=62",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=63",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=64",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=65",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=66",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=67",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=68",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=69",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=70",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=71",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=72",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=73",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=74",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=75",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=76",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=77",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=78",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=79",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=80",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=81",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=82",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=83",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "display-name": "Fan",
+          "id": "pin-kick-2",
+          "tmi-sent-ts": "1700000000000",
+          "user-id": "501"
+        },
+        "timestamp": "",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "kind": "message",
+      "message": {
+        "badges": [],
+        "channel": "kick:fixslug",
+        "color": "#FF4500",
+        "content": "spam",
+        "display_name": "Fan",
+        "id": "pin-kick-2",
+        "metadata": {},
+        "provider": "kick",
+        "segments": [
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=0",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=1",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=2",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=3",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=4",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=5",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=6",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=7",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=8",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=9",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=10",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=11",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=12",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=13",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=14",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=15",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=16",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=17",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=18",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=19",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=20",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=21",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=22",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=23",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=24",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=25",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=26",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=27",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=28",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=29",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=30",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=31",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=32",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=33",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=34",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=35",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=36",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=37",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=38",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=39",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=40",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=41",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=42",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=43",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=44",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=45",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=46",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=47",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=48",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=49",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=50",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=51",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=52",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=53",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=54",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=55",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=56",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=57",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=58",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=59",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=60",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=61",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=62",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=63",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=64",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=65",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=66",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=67",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=68",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=69",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=70",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=71",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=72",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=73",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=74",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=75",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=76",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=77",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=78",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=79",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=80",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=81",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=82",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=83",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=84",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=85",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=86",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=87",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=88",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=89",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=90",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=91",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=92",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=93",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=94",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=95",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=96",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=97",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=98",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=99",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=100",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=101",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=102",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=103",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=104",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=105",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=106",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=107",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=108",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=109",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=110",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=111",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=112",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=113",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=114",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=115",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=116",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=117",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=118",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=119",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=120",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=121",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=122",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=123",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=124",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=125",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=126",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=127",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=128",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=129",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=130",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=131",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=132",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=133",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=134",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=135",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=136",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=137",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=138",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=139",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=140",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=141",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=142",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=143",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=144",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=145",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=146",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=147",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=148",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=149",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=150",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=151",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=152",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=153",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=154",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=155",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=156",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=157",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=158",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=159",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=160",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=161",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=162",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=163",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=164",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=165",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=166",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=167",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=168",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=169",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=170",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=171",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=172",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=173",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=174",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=175",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=176",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=177",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=178",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=179",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=180",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=181",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=182",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=183",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=184",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=185",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=186",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=187",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=188",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=189",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=190",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=191",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=192",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=193",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=194",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=195",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=196",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=197",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=198",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=199",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=200",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=201",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=202",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=203",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=204",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=205",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=206",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=207",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=208",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=209",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=210",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=211",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=212",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=213",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=214",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=215",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=216",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=217",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=218",
+            "type": "emote"
+          },
+          {
+            "content": "catJAM",
+            "emote_id": "k1",
+            "emote_url": "https://files.kick.com/emotes/k1/fullsize?i=219",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "id": "pin-kick-2",
+          "sn-extra": "kept",
+          "user-id": "501"
+        },
+        "timestamp": "2026-11-21T10:00:00Z",
+        "user_id": "501",
+        "username": "fan"
+      },
+      "name": "oversize_non_twitch_falls_back_to_the_text_row"
+    },
+    {
+      "expect_snapshot": "full",
+      "golden": {
+        "badges": [
+          {
+            "image_url_1x": "https://badges.test/subscriber/12/1",
+            "image_url_2x": "https://badges.test/subscriber/12/2",
+            "image_url_4x": "https://badges.test/subscriber/12/4",
+            "name": "subscriber",
+            "title": "1-Year Subscriber",
+            "version": "12"
+          },
+          {
+            "image_url_1x": "https://badges.test/premium/1/1",
+            "image_url_2x": "https://badges.test/premium/1/2",
+            "image_url_4x": "https://badges.test/premium/1/4",
+            "name": "premium",
+            "title": "Prime Gaming",
+            "version": "1"
+          }
+        ],
+        "badges_resolved": true,
+        "channel": "fixroom",
+        "color": "#1E90FF",
+        "content": "hey @streamer fixWave",
+        "display_name": "Viewer",
+        "id": "pin-remote-1",
+        "metadata": {
+          "formatted_timestamp": "2:13 PM",
+          "formatted_timestamp_with_seconds": "2:13:20 PM",
+          "is_action": false,
+          "is_first_message": false,
+          "is_from_shared_chat": false,
+          "is_mentioned": false,
+          "is_reply_to_me": false,
+          "rules_evaluated": false,
+          "view": {
+            "badges": [
+              {
+                "provider": "twitch",
+                "title": "1-Year Subscriber",
+                "url": "https://badges.test/subscriber/12/2"
+              },
+              {
+                "provider": "twitch",
+                "title": "Prime Gaming",
+                "url": "https://badges.test/premium/1/2"
+              }
+            ],
+            "name_color": "#359bff",
+            "spans": [
+              {
+                "text": "hey ",
+                "type": "text"
+              },
+              {
+                "login": "streamer",
+                "text": "@streamer",
+                "type": "mention"
+              },
+              {
+                "text": " ",
+                "type": "text"
+              },
+              {
+                "code": "fixWave",
+                "type": "emote",
+                "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+              }
+            ]
+          }
+        },
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "hey",
+            "type": "text"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "@streamer",
+            "login": "streamer",
+            "type": "mention"
+          },
+          {
+            "content": " ",
+            "type": "text"
+          },
+          {
+            "content": "fixWave",
+            "emote_id": "s1",
+            "emote_url": "https://cdn.7tv.app/emote/s1/2x.webp",
+            "type": "emote"
+          }
+        ],
+        "tags": {
+          "badge-info": "subscriber/14",
+          "badges": "subscriber/12,premium/1",
+          "color": "#1E90FF",
+          "display-name": "Viewer",
+          "emotes": "",
+          "first-msg": "0",
+          "id": "pin-remote-1",
+          "mod": "0",
+          "room-id": "424242",
+          "subscriber": "1",
+          "tmi-sent-ts": "1700000000000",
+          "turbo": "0",
+          "user-id": "777",
+          "user-type": ""
+        },
+        "timestamp": "1700000000000",
+        "user_id": "777",
+        "username": "viewer"
+      },
+      "kind": "remote",
+      "mention": {
+        "at_ms": 1700000000000,
+        "body_raw": "hey @streamer fixWave",
+        "channel_id": "424242",
+        "color": "#1E90FF",
+        "id": "pin-remote-1",
+        "kind": "mention",
+        "platform": "twitch",
+        "room": "fixroom",
+        "sender_id": "777",
+        "sender_login": "viewer",
+        "sender_name": "Viewer",
+        "tags_raw": "badge-info=subscriber/14;badges=subscriber/12,premium/1;client-nonce=abcd1234;color=#1E90FF;display-name=Viewer;emotes=;first-msg=0;flags=4-8:S.3;id=pin-remote-1;mod=0;room-id=424242;subscriber=1;tmi-sent-ts=1700000000000;turbo=0;user-id=777;user-type=",
+        "text": "hey @streamer fixWave",
+        "tracked": true
+      },
+      "name": "remote_raw_body_and_tags"
+    }
+  ],
+  "emote_set": {
+    "7tv": [
+      {
+        "id": "s1",
+        "name": "fixWave",
+        "provider": "7tv",
+        "url": "https://cdn.7tv.app/emote/s1/2x.webp"
+      },
+      {
+        "id": "s2",
+        "is_zero_width": true,
+        "name": "fixHat",
+        "provider": "7tv",
+        "url": "https://cdn.7tv.app/emote/s2/2x.webp"
+      }
+    ],
+    "bttv": [
+      {
+        "id": "b1",
+        "name": "fixBttv",
+        "provider": "bttv",
+        "url": "https://cdn.betterttv.net/emote/b1/2x.webp"
+      }
+    ],
+    "ffz": [],
+    "kick": [],
+    "twitch": []
+  },
+  "note": "Inputs of the pin row parity test (services::mention_pin_row). Rows under \"golden\" are compared, and rewritten only with UPDATE_GOLDEN=1.",
+  "room": {
+    "id": "424242",
+    "login": "fixroom",
+    "partner_id": "999"
+  }
+}

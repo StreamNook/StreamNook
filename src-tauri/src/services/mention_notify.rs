@@ -84,6 +84,7 @@ mod tests {
             segments: vec![],
             metadata: Default::default(),
             received_at_ms: None,
+            badges_resolved: false,
         };
         msg.tags.insert("reply-parent-msg-body".into(), "did\\syou\\ssee\\sthat".into());
         let n = notice_for(&msg, MentionKind::Reply, Some("https://static-cdn.jtvnw.net/v.png"));
@@ -108,6 +109,7 @@ mod tests {
             provider: "twitch".into(),
             channel: "#SomeChannel".into(),
             received_at_ms: None,
+            badges_resolved: false,
             emotes: vec![],
             tags: HashMap::new(),
             layout: Default::default(),
@@ -148,6 +150,7 @@ mod tests {
             provider: "kick".into(),
             channel: "SomeSlug".into(),
             received_at_ms: None,
+            badges_resolved: false,
             emotes: vec![],
             tags: HashMap::new(),
             layout: Default::default(),

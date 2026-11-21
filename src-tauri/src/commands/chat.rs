@@ -1156,6 +1156,7 @@ mod history_tests {
                 provider: "kick".into(),
                 channel: "kick:momenthist".into(),
                 received_at_ms: None,
+                badges_resolved: false,
                 emotes: vec![],
                 tags: std::collections::HashMap::new(),
                 layout: Default::default(),

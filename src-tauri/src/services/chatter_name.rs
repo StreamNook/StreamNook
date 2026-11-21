@@ -213,6 +213,7 @@ mod tests {
             segments: Vec::new(),
             metadata: MessageMetadata::default(),
             received_at_ms: None,
+            badges_resolved: false,
         }
     }
 
