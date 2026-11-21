@@ -109,7 +109,15 @@ const AboutWidget = ({ onClose }: AboutWidgetProps) => {
                 FFZ
               </ExternalAnchor>
               </Tooltip>
-
+              <span className="text-textSecondary">•</span>
+              <Tooltip content="StreamDatabase: badges, emotes and more for viewers" side="top">
+              <ExternalAnchor
+                href="https://www.streamdatabase.com"
+                className="text-textPrimary hover:text-accent transition-colors font-medium text-sm"
+              >
+                StreamDatabase
+              </ExternalAnchor>
+              </Tooltip>
             </div>
           </div>
 
