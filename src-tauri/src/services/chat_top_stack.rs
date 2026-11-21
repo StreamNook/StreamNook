@@ -238,6 +238,8 @@ pub fn layout(req: &StackRequest) -> StackLayout {
     let open_min = open_kind.filter(|k| others.contains(k)).map(strip).unwrap_or(0.0);
     let all_strips: f64 = strips.iter().map(|k| strip(k)).sum();
     let floor_h = if pins { floor.strip } else { 0.0 };
+    // One row: the floor is the newest row plus the count line.
+    let row_h = (floor.strip - floor.line).max(1.0);
     let unlimited = cap.is_none();
     let cap_v = cap.unwrap_or(f64::INFINITY);
 
@@ -272,11 +274,14 @@ pub fn layout(req: &StackRequest) -> StackLayout {
 
     // The open card takes what it needs next, the pins the rest up to their natural height.
     let mut open_h = 0.0;
+    let mut open_is_strip = false;
     if let Some(k) = open_kind.filter(|k| others.contains(k)).filter(|_| !open_folded) {
         let natural = height_of(req, k).open;
         let spare = if unlimited { f64::INFINITY } else { (cap_v - used).max(0.0) };
         open_h = (strip(k) + spare).min(natural).max(strip(k));
         used += open_h - strip(k);
+        // A body that cannot show above the strip's own height stays a strip.
+        open_is_strip = open_h <= strip(k);
     }
     let pins_h = if !pins {
         0.0
@@ -285,7 +290,12 @@ pub fn layout(req: &StackRequest) -> StackLayout {
     } else {
         let natural = if req.strips_only { floor_h } else { floor.open.max(floor_h) };
         let spare = if unlimited { f64::INFINITY } else { (cap_v - used).max(0.0) };
-        (floor_h + spare).min(natural).max(floor_h)
+        // The rows grow past the floor only when at least one more whole row fits.
+        if spare >= row_h {
+            (floor_h + spare).min(natural).max(floor_h)
+        } else {
+            floor_h
+        }
     };
 
     let mut slots: Vec<StackSlot> = Vec::new();
@@ -308,6 +318,8 @@ pub fn layout(req: &StackRequest) -> StackLayout {
             }
         } else if all_folded.iter().any(|f| f == k) {
             StackSlot { kind: (*k).to_string(), open: is_open, form: Form::Folded, height: 0.0, more_cards: 0 }
+        } else if is_open && open_is_strip {
+            StackSlot { kind: (*k).to_string(), open: true, form: Form::Strip, height: strip(k).round(), more_cards: 0 }
         } else if is_open {
             StackSlot { kind: (*k).to_string(), open: true, form: Form::Open, height: open_h.round(), more_cards: 0 }
         } else {
@@ -473,9 +485,9 @@ mod tests {
             (more.count, more.kinds.clone()),
             (4, vec!["poll".to_string(), "drop".into(), "channel_pin".into(), "mention_context".into()])
         );
-        // The pins keep at least their floor and take what is left (24 px more here).
+        // The pins keep their floor: 24 px more is not a whole row (36 px), so they do not grow.
         let pins = form_of(&l, "mention_pins");
-        assert_eq!((pins.form, pins.height), (Form::Full, 88.0));
+        assert_eq!((pins.form, pins.height), (Form::Floor, 64.0));
         assert!(l.height <= l.max_height);
     }
 
@@ -510,6 +522,42 @@ mod tests {
         assert_eq!(form_of(&l, "mention_pins").form, Form::Floor);
         assert!(form_of(&l, "poll").height >= 36.0);
         assert!(l.height <= 200.0);
+    }
+
+    /// Coordinator decision 2: an open card whose body cannot show above its strip height inside
+    /// the cap stays a strip (still the chosen card), never open at its strip height.
+    #[test]
+    fn an_open_card_with_no_room_for_its_body_is_a_strip() {
+        // Cap 100 (a 250 px column): the floor (64) and the poll's strip (36) take all of it.
+        let mut r = req(&["poll", "mention_pins"], 250.0);
+        r.opened = Some("poll".into());
+        let l = layout(&r);
+        let poll = form_of(&l, "poll");
+        assert!(poll.open, "the choice does not move");
+        assert_eq!(poll.form, Form::Strip);
+        assert_eq!(poll.height, 36.0);
+        assert_eq!(form_of(&l, "mention_pins").form, Form::Floor);
+        assert!(l.height <= l.max_height);
+        // With room above the strip it opens, as before.
+        let roomy = layout(&{
+            let mut r = req(&["poll", "mention_pins"], 400.0);
+            r.opened = Some("poll".into());
+            r
+        });
+        assert_eq!(form_of(&roomy, "poll").form, Form::Open);
+    }
+
+    /// Coordinator decision 3: the pins stay at their floor unless the spare height fits one
+    /// more whole row (a row is the floor minus its count line).
+    #[test]
+    fn the_pins_grow_past_the_floor_only_for_a_whole_row() {
+        // Cap 120 (300 px column): floor 64, a 36 px row needs 100.
+        let l = layout(&req(&["mention_pins"], 300.0));
+        assert_eq!(form_of(&l, "mention_pins").form, Form::Full);
+        // Cap 99 (247.5 px): 35 px spare is not a whole row.
+        let l = layout(&req(&["mention_pins"], 247.5));
+        let pins = form_of(&l, "mention_pins");
+        assert_eq!((pins.form, pins.height), (Form::Floor, 64.0));
     }
 
     #[test]

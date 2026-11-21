@@ -140,8 +140,8 @@
         {
           "kind": "mention_pins",
           "open": false,
-          "form": "full",
-          "height": 88.0
+          "form": "floor",
+          "height": 64.0
         }
       ],
       "max_height": 152.0,
@@ -156,7 +156,7 @@
         ],
         "height": 28.0
       },
-      "height": 152.0,
+      "height": 128.0,
       "room_key": ""
     }
   },
@@ -288,7 +288,7 @@
         {
           "kind": "poll",
           "open": true,
-          "form": "open",
+          "form": "strip",
           "height": 36.0
         },
         {
@@ -425,12 +425,12 @@
         {
           "kind": "mention_pins",
           "open": false,
-          "form": "full",
-          "height": 76.0
+          "form": "floor",
+          "height": 64.0
         }
       ],
       "max_height": 76.0,
-      "height": 76.0,
+      "height": 64.0,
       "room_key": ""
     }
   },
@@ -620,8 +620,8 @@
         {
           "kind": "mention_pins",
           "open": false,
-          "form": "full",
-          "height": 88.0
+          "form": "floor",
+          "height": 64.0
         }
       ],
       "max_height": 152.0,
@@ -635,7 +635,7 @@
         ],
         "height": 28.0
       },
-      "height": 152.0,
+      "height": 128.0,
       "room_key": ""
     }
   },
