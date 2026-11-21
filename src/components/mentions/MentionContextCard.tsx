@@ -11,6 +11,7 @@ const KIND_WORDS: Record<MentionKind, string> = {
   mention: 'mentioned you',
   reply: 'replied to you',
   word: 'matched a highlight',
+  gift: 'gifted you a sub',
 };
 
 export function MentionContextCard({ entry, onDismiss }: { entry: MentionEntry; onDismiss: () => void }) {

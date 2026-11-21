@@ -696,6 +696,12 @@ pub struct MessageFacts<'a> {
     pub ts_ms: i64,
     /// "monitored" | "restricted" when the sender is flagged in this channel.
     pub suspicious: Option<String>,
+    /// A Twitch gift's recipient (`msg-param-recipient-id`), else empty.
+    pub gift_recipient_id: &'a str,
+    /// A Twitch gift's recipient login, lowercased, else empty.
+    pub gift_recipient_login: String,
+    /// A Kick event's normalized payload (`kind|a,b,c`), else empty.
+    pub event_payload: &'a str,
 }
 
 impl<'a> MessageFacts<'a> {
@@ -840,8 +846,42 @@ impl<'a> MessageFacts<'a> {
             announcement,
             ts_ms,
             suspicious,
+            gift_recipient_id: msg.tags.get("msg-param-recipient-id").map(|s| s.as_str()).unwrap_or(""),
+            gift_recipient_login: tag("msg-param-recipient-user-name").to_lowercase(),
+            event_payload: msg
+                .tags
+                .get(crate::services::providers::kick::EVENT_PAYLOAD_TAG)
+                .map(|s| s.as_str())
+                .unwrap_or(""),
         }
     }
+}
+
+/// A gift notice that gives the viewer a sub: a Twitch gift (Twitch sends one
+/// `subgift` per recipient, a gift bomb's included) naming one of your Twitch
+/// accounts by id or your login, or a Kick gift listing your Kick name.
+/// YouTube posts a gifted membership as the recipient's own row, which names
+/// no gifter to announce, so it is not counted here.
+fn gift_to_me(facts: &MessageFacts<'_>, own: Option<&(String, String)>, platform: Option<&Identity>) -> bool {
+    if facts.twitch {
+        if !matches!(facts.msg_type, "subgift" | "anonsubgift") {
+            return false;
+        }
+        let id = facts.gift_recipient_id;
+        let by_id = !id.is_empty()
+            && (own.is_some_and(|(_, me)| me == id) || crate::services::chat_row_view::is_own_account(id));
+        let by_login = !facts.gift_recipient_login.is_empty()
+            && own.is_some_and(|(login, _)| *login == facts.gift_recipient_login);
+        return by_id || by_login;
+    }
+    if facts.provider != "kick" || !matches!(facts.msg_type, "subgift" | "submysterygift") {
+        return false;
+    }
+    let Some(me) = platform.filter(|p| !p.target.login.is_empty()) else { return false };
+    let Some((_, names)) = facts.event_payload.split_once('|') else { return false };
+    names
+        .split(',')
+        .any(|n| n == me.target.login || me.target.display.as_deref() == Some(n))
 }
 
 fn has_link(content: &str) -> bool {
@@ -933,6 +973,9 @@ pub struct Verdict {
     /// The highlight that matched was one of your phrases (not a user or
     /// badge rule), so it can count as a mention.
     pub phrase_hit: bool,
+    /// A gift notice that gives the viewer a sub (`gift_to_me`). It counts
+    /// as a mention too, so the row wears the mention highlight.
+    pub gift_to_me: bool,
 }
 
 /// Full result of one evaluation, applied to the message after the borrowed
@@ -940,6 +983,7 @@ pub struct Verdict {
 struct Evaluation {
     drop: bool,
     mentioned: bool,
+    gift_to_me: bool,
     name_hit: Option<NameHit>,
     reply_to_me: bool,
     is_own: bool,
@@ -955,6 +999,7 @@ impl Evaluation {
         Evaluation {
             drop: true,
             mentioned: false,
+            gift_to_me: false,
             name_hit: None,
             reply_to_me: false,
             is_own: false,
@@ -974,6 +1019,7 @@ impl Evaluation {
             reply_to_me: self.reply_to_me,
             name_hit: self.name_hit,
             phrase_hit: self.highlight.as_ref().is_some_and(|h| h.kind == "phrase"),
+            gift_to_me: self.gift_to_me,
         }
     }
 }
@@ -1349,7 +1395,10 @@ impl ChatRules {
         } else {
             None
         };
-        let mentioned = name_hit.is_some();
+        // A sub gifted to you is about you as much as an @: it wears the
+        // mention highlight and files in the inbox (`mention_inbox::kind_for`).
+        let gift_to_me = !is_own && gift_to_me(facts, own.as_ref(), platform.as_ref());
+        let mentioned = name_hit.is_some() || gift_to_me;
         let reply_to_me = !is_own
             && if facts.twitch {
                 own.as_ref()
@@ -1454,6 +1503,7 @@ impl ChatRules {
         Evaluation {
             drop: false,
             mentioned,
+            gift_to_me,
             name_hit,
             reply_to_me,
             is_own,
@@ -2447,6 +2497,70 @@ mod tests {
         eval_with(&rules, &mut m);
         assert!(!m.metadata.is_mentioned);
         assert!(m.metadata.highlight.is_some());
+    }
+
+    /// A Twitch gift notice as IRC parses it: no words, the recipient in tags.
+    fn gift_notice(msg_id: &str, recipient_id: &str, recipient_login: &str) -> ChatMessage {
+        let mut m = with_tags(
+            msg("gifter", ""),
+            &[
+                ("msg-id", msg_id),
+                ("msg-param-recipient-id", recipient_id),
+                ("msg-param-recipient-user-name", recipient_login),
+                ("msg-param-origin-id", "bomb-1"),
+            ],
+        );
+        m.metadata.msg_type = Some(msg_id.into());
+        m.metadata.system_message = Some(format!("Gifter gifted a Tier 1 sub to {recipient_login}!"));
+        m
+    }
+
+    #[test]
+    fn a_sub_gifted_to_you_counts_as_a_mention_and_one_to_someone_else_does_not() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("Rainy", "999");
+        let rules = rules_from("{}", "{}", "{}");
+
+        let mut mine = gift_notice("subgift", "999", "rainy");
+        let v = eval_with(&rules, &mut mine);
+        assert!(v.gift_to_me && v.mentioned);
+        assert!(mine.metadata.is_mentioned, "the row wears the mention highlight");
+        assert_eq!(mine.metadata.scrollbar_mark.as_ref().map(|m| m.kind.as_str()), Some("mention"));
+
+        let mut theirs = gift_notice("subgift", "555", "lucky");
+        let v = eval_with(&rules, &mut theirs);
+        assert!(!v.gift_to_me && !v.mentioned);
+        assert!(!theirs.metadata.is_mentioned);
+
+        // A gift bomb: the announcement names nobody; the child naming you is
+        // yours, an anonymous one too, and the login alone is enough.
+        let mut bomb = with_tags(msg("gifter", ""), &[("msg-id", "submysterygift"), ("msg-param-mass-gift-count", "5")]);
+        bomb.metadata.msg_type = Some("submysterygift".into());
+        assert!(!eval_with(&rules, &mut bomb).gift_to_me);
+        assert!(eval_with(&rules, &mut gift_notice("anonsubgift", "999", "rainy")).gift_to_me);
+        assert!(eval_with(&rules, &mut gift_notice("subgift", "", "Rainy")).gift_to_me);
+        // A resub that merely names you is no gift.
+        assert!(!eval_with(&rules, &mut gift_notice("resub", "999", "rainy")).gift_to_me);
+    }
+
+    #[test]
+    fn a_kick_gift_listing_your_name_is_yours() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("kick", "77", "rainy", "Rainy");
+        let rules = rules_from("{}", "{}", "{}");
+        let kick = |kind: &str, payload: &str| {
+            let mut m = with_tags(msg("kickgifter", ""), &[(crate::services::providers::kick::EVENT_PAYLOAD_TAG, payload)]);
+            m.provider = "kick".into();
+            m.user_id = "5".into();
+            m.metadata.msg_type = Some(kind.into());
+            m
+        };
+        assert!(eval_with(&rules, &mut kick("submysterygift", "submysterygift|alpha,rainy,zed")).gift_to_me);
+        assert!(eval_with(&rules, &mut kick("subgift", "subgift|rainy")).gift_to_me);
+        assert!(!eval_with(&rules, &mut kick("subgift", "subgift|rainyday")).gift_to_me);
     }
 
     #[test]

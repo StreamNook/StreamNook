@@ -974,7 +974,8 @@ export interface MentionSettings {
 
 // One entry in the mentions inbox (services/mention_inbox.rs `MentionEntry`).
 // Rust files, reads and removes them; the pages only draw them.
-export type MentionKind = 'mention' | 'reply' | 'word';
+// `gift`: someone gifted you a sub (filed from the chat's gift notice).
+export type MentionKind = 'mention' | 'reply' | 'word' | 'gift';
 
 /** One pinned mention (SN-284, Rust `mention_inbox::MentionPin`): the newest
  *  copy of a message, when its pin ends (Rust's clock) and how many copies of

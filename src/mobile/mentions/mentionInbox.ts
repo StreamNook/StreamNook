@@ -43,6 +43,7 @@ export const KIND_LABEL: Record<MentionEntry['kind'], string> = {
   mention: 'mentioned you',
   reply: 'replied to you',
   word: 'highlight',
+  gift: 'gifted you a sub',
 };
 
 /** A room key's platform: `kick:xqc` is Kick, a bare login is Twitch. */

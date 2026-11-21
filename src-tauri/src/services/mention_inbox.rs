@@ -117,6 +117,9 @@ pub enum MentionKind {
     Reply,
     /// One of your highlight phrases.
     Word,
+    /// Someone gifted you a sub. Filed even while its chat is on screen:
+    /// a gift card scrolls past (or folds into a gift bomb) too fast to see.
+    Gift,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -385,7 +388,7 @@ impl Inbox {
         if self.tombstones.iter().any(|t| *t == entry.id) {
             return false;
         }
-        if self.visible.contains(&entry.room) {
+        if self.visible.contains(&entry.room) && entry.kind != MentionKind::Gift {
             entry.read = true;
             entry.seen_live = true;
         }
@@ -604,6 +607,16 @@ impl Inbox {
         (rows, false, cursor)
     }
 
+    /// Whether a gift to you in `room` was filed within `window_ms` of
+    /// `at_ms`: Twitch's bell reports the same gift minutes after the chat
+    /// showed it.
+    pub fn has_gift_near(&self, room: &str, at_ms: i64, window_ms: i64) -> bool {
+        let room = room.to_lowercase();
+        self.entries
+            .iter()
+            .any(|e| e.kind == MentionKind::Gift && e.room == room && (e.at_ms - at_ms).abs() <= window_ms)
+    }
+
     /// Unread entries one chip would show.
     pub fn unread_for(&self, filter: InboxFilter) -> u32 {
         self.entries
@@ -637,7 +650,7 @@ impl InboxFilter {
     pub fn admits(self, kind: MentionKind) -> bool {
         match self {
             InboxFilter::All => true,
-            InboxFilter::Mentions => matches!(kind, MentionKind::Mention | MentionKind::Reply),
+            InboxFilter::Mentions => matches!(kind, MentionKind::Mention | MentionKind::Reply | MentionKind::Gift),
             InboxFilter::Highlights => kind == MentionKind::Word,
             InboxFilter::Whispers => false,
         }
@@ -914,6 +927,8 @@ pub fn room_key(provider: &str, channel: &str) -> String {
 pub fn kind_for(verdict: &Verdict, highlight_words: bool) -> Option<MentionKind> {
     if verdict.drop {
         None
+    } else if verdict.gift_to_me {
+        Some(MentionKind::Gift)
     } else if verdict.reply_to_me {
         Some(MentionKind::Reply)
     } else if verdict.mentioned {
@@ -954,10 +969,18 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         channel_id: msg.tags.get("room-id").cloned(),
         sender_id: msg.user_id.clone(),
         sender_login: msg.username.to_lowercase(),
-        sender_name: if msg.display_name.is_empty() { msg.username.clone() } else { msg.display_name.clone() },
+        sender_name: if kind == MentionKind::Gift && anonymous_gift(msg) {
+            ANONYMOUS_GIFTER.to_string()
+        } else if msg.display_name.is_empty() {
+            msg.username.clone()
+        } else {
+            msg.display_name.clone()
+        },
         // The color the chat row shows, so a dark name stays readable.
         sender_color: Some(crate::services::chat_row_view::readable_color(msg.color.as_deref())),
-        text: msg.content.chars().take(MAX_TEXT).collect(),
+        // A gift notice has no words of its own; the platform's sentence
+        // ("X gifted a Tier 1 sub to you!") is what it says.
+        text: gift_text(msg, kind).unwrap_or(&msg.content).chars().take(MAX_TEXT).collect(),
         parts: parts_for(&msg.segments),
         kind,
         reply_parent_id: msg.tags.get("reply-parent-msg-id").cloned(),
@@ -969,6 +992,24 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         pin_from_ms: None,
         pin_dismissed: false,
     }
+}
+
+/// How a gift with no name to it is credited.
+const ANONYMOUS_GIFTER: &str = "An anonymous gifter";
+
+/// A gift Twitch sent without naming its gifter (`anonsubgift`, sent by
+/// the AnAnonymousGifter account).
+fn anonymous_gift(msg: &ChatMessage) -> bool {
+    msg.metadata.msg_type.as_deref().is_some_and(|t| t.starts_with("anon"))
+        || msg.username.eq_ignore_ascii_case("ananonymousgifter")
+}
+
+/// A gift entry's words: the platform's own sentence, when the row has one.
+fn gift_text(msg: &ChatMessage, kind: MentionKind) -> Option<&str> {
+    if kind != MentionKind::Gift {
+        return None;
+    }
+    msg.metadata.system_message.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// A reply's parent words: from the parsed reply (Twitch, its history
@@ -1036,6 +1077,7 @@ pub fn notice_text(entry: &MentionEntry) -> NoticeText {
         MentionKind::Reply => ("Replied to you in", "replied to you in"),
         MentionKind::Mention => ("Mentioned you in", "mentioned you in"),
         MentionKind::Word => ("In", "in"),
+        MentionKind::Gift => ("Gifted you a sub in", "gifted you a sub in"),
     };
     NoticeText {
         subtitle: format!("{subtitle} {chat_title}"),
@@ -1407,13 +1449,18 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     });
     // Already filed (a second pane, a replayed backlog): no second ping.
     let Some((true, visible)) = visible else { return };
-    let mentioned = kind == MentionKind::Mention;
+    let gift = kind == MentionKind::Gift;
+    // A gift to you sounds like a mention: it is about you.
+    let mentioned = kind == MentionKind::Mention || gift;
     let reply = kind == MentionKind::Reply;
     // A highlight phrase already plays its own rule's sound.
     if mentioned || reply {
         crate::services::mention_ping::on_live_message(msg, mentioned, reply);
     }
-    if visible || crate::services::streamer_mode::StreamerMode::is_active() {
+    // A chat on screen saw a mention happen; a gift card is easy to miss
+    // there (it scrolls by, or folds into its gift bomb), so it is announced
+    // all the same.
+    if (visible && !gift) || crate::services::streamer_mode::StreamerMode::is_active() {
         return;
     }
     let fresh = sent_at_ms(msg).is_none_or(|t| now_ms() - t <= NOTIFY_MAX_AGE_MS);
@@ -1475,6 +1522,15 @@ pub fn on_message_deleted(message_id: &str) {
 // ---------------------------------------------------------------------------
 // What other services and the commands call
 // ---------------------------------------------------------------------------
+
+/// How far apart the chat's copy of a gift and the bell's may be.
+pub const GIFT_MATCH_WINDOW_MS: i64 = 15 * 60 * 1000;
+
+/// Whether the chat already filed this gift (a Twitch channel login and the
+/// bell row's time): the bell poll then leaves it out.
+pub fn chat_caught_gift(channel_login: &str, at_ms: i64) -> bool {
+    with_inbox(|inbox| (inbox.has_gift_near(channel_login, at_ms, GIFT_MATCH_WINDOW_MS), false)).unwrap_or(false)
+}
 
 pub fn unread_by_room() -> HashMap<String, u32> {
     with_inbox(|inbox| (inbox.unread_by_room(), false)).unwrap_or_default()
@@ -1673,6 +1729,37 @@ mod tests {
     }
 
     const NOW: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn a_gift_in_a_chat_on_screen_stays_unread_and_reaches_the_island() {
+        let mut inbox = Inbox::default();
+        inbox.set_visible(vec!["maefae".into()]);
+        let mut gift = entry("g1", "maefae", NOW);
+        gift.kind = MentionKind::Gift;
+        assert!(inbox.file(gift, NOW));
+        let mut mention = entry("m1", "maefae", NOW + 1);
+        mention.kind = MentionKind::Mention;
+        assert!(inbox.file(mention, NOW + 1));
+        let filed = |id: &str| inbox.get(id).cloned().unwrap();
+        assert!(!filed("g1").read && !filed("g1").seen_live, "a gift card is easy to miss on screen");
+        assert!(filed("m1").read && filed("m1").seen_live, "a mention on screen was seen");
+        // The island lists it, under All and Mentions.
+        let (island, _) = inbox.page(None, 10, true);
+        assert_eq!(island.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["g1"]);
+        assert!(InboxFilter::Mentions.admits(MentionKind::Gift) && !InboxFilter::Highlights.admits(MentionKind::Gift));
+        // The bell's copy of the same gift, minutes later, is recognized.
+        assert!(inbox.has_gift_near("MaeFae", NOW + 4 * 60_000, GIFT_MATCH_WINDOW_MS));
+        assert!(!inbox.has_gift_near("other", NOW, GIFT_MATCH_WINDOW_MS));
+        assert!(!inbox.has_gift_near("maefae", NOW + GIFT_MATCH_WINDOW_MS + 1, GIFT_MATCH_WINDOW_MS));
+    }
+
+    #[test]
+    fn a_gift_files_before_a_reply_or_a_mention() {
+        let mut v = verdict(true, true, false);
+        v.gift_to_me = true;
+        assert_eq!(kind_for(&v, true), Some(MentionKind::Gift));
+        assert!(pinged_with(&v, false));
+    }
 
     // ---- Pinned mentions (SN-284) ----------------------------------------
 
@@ -2287,6 +2374,7 @@ mod tests {
             reply_to_me: reply,
             name_hit: None,
             phrase_hit: phrase,
+            gift_to_me: false,
         }
     }
 

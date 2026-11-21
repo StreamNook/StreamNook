@@ -19,8 +19,9 @@ use crate::services::mention_inbox::{open_key, room_key, MentionNotice};
 fn mirrored(msg: &ChatMessage, notice: &MentionNotice) -> MirroredNotice {
     let room = room_key(&msg.provider, &msg.channel);
     let channel = room.split_once(':').map(|(_, slug)| slug.to_string()).unwrap_or_else(|| room.clone());
-    // Only Twitch takes a threaded reply from the notification.
-    let twitch = !room.contains(':');
+    // Only Twitch takes a threaded reply from the notification, and only to a
+    // message: a gift notice is not one anybody can reply to.
+    let twitch = !room.contains(':') && notice.entry.kind != crate::services::mention_inbox::MentionKind::Gift;
     MirroredNotice {
         id: format!("mention-{}", msg.id),
         kind: "mention".into(),

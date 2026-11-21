@@ -51,7 +51,8 @@ export function emptyWords(filter: InboxFilterId, syncing = false): { text: stri
 
 /** "N identical mentions", the fold's line under its row. */
 export function foldedWords(entry: MentionEntry, count: number): string {
-  const noun = entry.kind === 'reply' ? 'replies' : entry.kind === 'word' ? 'messages' : 'mentions';
+  const noun =
+    entry.kind === 'reply' ? 'replies' : entry.kind === 'word' ? 'messages' : entry.kind === 'gift' ? 'gifts' : 'mentions';
   return `${count} identical ${noun}`;
 }
 
@@ -59,5 +60,6 @@ export function foldedWords(entry: MentionEntry, count: number): string {
 export function whereWords(entry: MentionEntry): { lead: string; place: string | null } {
   if ((entry.kind as string) === 'whisper') return { lead: 'whispered', place: null };
   const i = entry.room.indexOf(':');
-  return { lead: 'in', place: entry.channel_login || (i > 0 ? entry.room.slice(i + 1) : entry.room) };
+  const place = entry.channel_login || (i > 0 ? entry.room.slice(i + 1) : entry.room);
+  return { lead: entry.kind === 'gift' ? 'gifted you a sub in' : 'in', place };
 }

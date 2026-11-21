@@ -46,7 +46,7 @@ import { fetchAllEmotes, fetchKickChannelEmotes, fetchYouTubeChannelEmotes, enha
 import { Logger } from '../utils/logger';
 import { useAppStore } from './AppStore';
 import { useGiftBombStore, type GiftRecipient } from './giftBombStore';
-import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../utils/giftBombCollapse';
+import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild, isGiftToViewer } from '../utils/giftBombCollapse';
 import { useMessageRepeatStore, type RepeatParticipant } from './messageRepeatStore';
 import { normalizeForRepeat, isPrivilegedChatter } from '../utils/messageRepeat';
 import type { SongMatch } from '../utils/songId';
@@ -539,7 +539,7 @@ export function resetRepeatRuns(channelKey?: string): void {
 function bufferedGiftChildInfo(m: any): { origin: string; recipient?: GiftRecipient } | null {
   if (!m || typeof m !== 'object') return null;
   const mt = m.metadata?.msg_type || m.tags?.['msg-id'];
-  if (!isGiftBombChild(mt)) return null;
+  if (!isGiftBombChild(mt) || isGiftToViewer(m)) return null;
   const origin = giftBombOriginOf(m.tags);
   if (!origin) return null;
   const rid = m.tags?.['msg-param-recipient-id'];
@@ -3286,7 +3286,7 @@ function appendStructuredMessage(slice: ChannelSlice, parsed: any) {
       const n = parseInt(t['msg-param-mass-gift-count'] ?? '', 10);
       useGiftBombStore.getState().noteAnnouncement(origin, Number.isFinite(n) ? n : undefined);
       if (foldBufferedGiftChildren(slice, origin) > 0) bumpRevisionFor([slice.channel]);
-    } else if (origin && isGiftBombChild(mt) && announcedGiftBombOrigins.has(origin)) {
+    } else if (origin && isGiftBombChild(mt) && announcedGiftBombOrigins.has(origin) && !isGiftToViewer(parsed)) {
       const rid = t['msg-param-recipient-id'] || '';
       if (rid) {
         useGiftBombStore.getState().addRecipient(origin, {

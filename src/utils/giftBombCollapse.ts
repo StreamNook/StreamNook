@@ -27,3 +27,11 @@ export function isGiftBombAnnouncement(msgType?: string | null): boolean {
 export function isGiftBombChild(msgType?: string | null): boolean {
   return msgType === 'subgift' || msgType === 'anonsubgift';
 }
+
+/** The gift that went to the viewer, which never folds into its bomb: as one
+ *  name in the announcement's list it went unseen. Rust decides it (chat_rules
+ *  `gift_to_me` stamps the row a mention); a gift row carries no words of its
+ *  own, so it is a mention only then. */
+export function isGiftToViewer(m: { metadata?: { is_mentioned?: boolean } | null } | null | undefined): boolean {
+  return m?.metadata?.is_mentioned === true;
+}

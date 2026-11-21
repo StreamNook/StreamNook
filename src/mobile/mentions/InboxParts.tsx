@@ -1,11 +1,11 @@
 // The pieces an inbox row and the arrival card share: the sender's face with
 // the kind's mark on it, and a message with its emotes.
 import React, { useState } from 'react';
-import { AtSign, Highlighter, MessageCircle, Reply } from 'lucide-react';
+import { AtSign, Gift, Highlighter, MessageCircle, Reply } from 'lucide-react';
 import type { MentionEntry, MentionPart } from '../../types';
 import type { FaceInfo } from './inboxModel';
 
-const KIND_ICON = { mention: AtSign, reply: Reply, word: Highlighter, whisper: MessageCircle } as const;
+const KIND_ICON = { mention: AtSign, reply: Reply, word: Highlighter, gift: Gift, whisper: MessageCircle } as const;
 
 /** The sender's picture (Rust's cached lookup), or their initial on their own
  *  color while it loads or when there is none, with the kind's mark on its

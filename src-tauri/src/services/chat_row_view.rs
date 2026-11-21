@@ -167,6 +167,12 @@ pub fn set_own_accounts(ids: Vec<String>) {
     }
 }
 
+/// Whether this Twitch user id is one of the viewer's own accounts (primary
+/// or linked).
+pub fn is_own_account(user_id: &str) -> bool {
+    !user_id.is_empty() && OWN_ACCOUNTS.read().map(|own| own.iter().any(|id| id == user_id)).unwrap_or(false)
+}
+
 /// Whether a member's StreamNook badge stays off this screen: the member is one
 /// of the viewer's own accounts and the viewer turned their own badge off
 /// (`chat_design.show_own_streamnook_badge`), for clean screenshots. Only this

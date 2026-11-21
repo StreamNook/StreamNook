@@ -98,11 +98,14 @@ const MENTION_KIND_WORDS: Record<MentionKind, string> = {
     mention: 'mentioned you',
     reply: 'replied to you',
     word: 'matched a highlight',
+    gift: 'gifted you a sub',
 };
 
 // The kind is the mark: an @ for a mention, the reply arrow for a reply, the
-// highlighter for one of your highlight words.
+// highlighter for one of your highlight words, and the gift sub rows' own
+// pink gift for a sub gifted to you.
 const MentionGlyph = ({ kind, size }: { kind: MentionKind; size: number }) => {
+    if (kind === 'gift') return <Gift size={size} className="text-pink-400 flex-shrink-0" />;
     const Icon = kind === 'reply' ? Reply : kind === 'word' ? Highlighter : AtSign;
     // The reply arrow's ink is short and wide; a step up matches the @'s weight.
     return <Icon size={kind === 'reply' ? Math.round(size * 1.2) : size} className="text-accent flex-shrink-0" />;
@@ -352,6 +355,7 @@ const getPreviewText = (n: IslandItem): string => {
             const { sender_name: name, channel_login: channel, kind } = n.data;
             if (kind === 'reply') return `${name} replied to you in ${channel}`;
             if (kind === 'word') return `${name} in ${channel}`;
+            if (kind === 'gift') return `${name} gifted you a sub in ${channel}`;
             return `${name} mentioned you in ${channel}`;
         }
         case 'live': {

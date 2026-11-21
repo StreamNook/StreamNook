@@ -72,7 +72,7 @@ export const rowUnread = (row: InboxItem): boolean =>
 
 /** "N identical mentions", the fold's line under its row (the phones' words). */
 export function foldedLine(kind: MentionKind, count: number): string {
-  const noun = kind === 'reply' ? 'replies' : kind === 'word' ? 'messages' : 'mentions';
+  const noun = kind === 'reply' ? 'replies' : kind === 'word' ? 'messages' : kind === 'gift' ? 'gifts' : 'mentions';
   return `${count} identical ${noun}`;
 }
 

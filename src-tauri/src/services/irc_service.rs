@@ -6965,6 +6965,47 @@ mod own_message_tests {
         );
     }
 
+    /// Rainy's report (2026-11-20): subs gifted to you showed nothing. The
+    /// USERNOTICE names you only in tags and has no words, so the mention
+    /// check never saw you; it now files a gift in the inbox and highlights
+    /// the row, and one to anybody else stays an ordinary card.
+    #[test]
+    fn a_sub_gifted_to_the_viewer_files_a_gift_and_highlights_the_row() {
+        use crate::services::chat_rules::ChatRules;
+        use crate::services::mention_inbox::{entry_for, kind_for, notice_text, MentionKind};
+        let _own = ChatRules::own_identity_test_lock();
+        ChatRules::set_own_identity("rainy", "4040");
+        let rules = ChatRules::snapshot();
+        let line = |id: &str, msg_id: &str, login: &str, recipient: &str, recipient_id: &str| {
+            format!(
+                "@badges=;color=;display-name={login};emotes=;id={id};login={login};msg-id={msg_id};msg-param-origin-id=o9;msg-param-recipient-display-name={recipient};msg-param-recipient-id={recipient_id};msg-param-recipient-user-name={};msg-param-sub-plan=1000;room-id=1;system-msg={login}\\sgifted\\sa\\sTier\\s1\\ssub\\sto\\s{recipient}!;tmi-sent-ts=1700000000000;user-id=3 :tmi.twitch.tv USERNOTICE #maefae",
+                recipient.to_lowercase()
+            )
+        };
+
+        let mut mine = IrcService::parse_live_usernotice(&line("g1", "subgift", "Gifter", "Rainy", "4040"), 1).expect("parses");
+        let verdict = ChatRules::evaluate_unrecorded(&mut mine, &rules);
+        assert!(mine.metadata.is_mentioned, "the recipient's own gift card is highlighted");
+        assert_eq!(kind_for(&verdict, true), Some(MentionKind::Gift));
+        let entry = entry_for(&mine, MentionKind::Gift, 0);
+        assert_eq!(entry.room, "maefae");
+        assert_eq!(entry.text, "Gifter gifted a Tier 1 sub to Rainy!");
+        assert_eq!(notice_text(&entry).headline, "Gifter gifted you a sub in maefae");
+
+        let mut theirs = IrcService::parse_live_usernotice(&line("g2", "subgift", "Gifter", "Lucky", "777"), 1).expect("parses");
+        let verdict = ChatRules::evaluate_unrecorded(&mut theirs, &rules);
+        assert!(!theirs.metadata.is_mentioned);
+        assert_eq!(kind_for(&verdict, true), None);
+
+        // One of a gift bomb's children, from an anonymous gifter.
+        let mut anon =
+            IrcService::parse_live_usernotice(&line("g3", "anonsubgift", "AnAnonymousGifter", "Rainy", "4040"), 1).expect("parses");
+        let verdict = ChatRules::evaluate_unrecorded(&mut anon, &rules);
+        assert_eq!(kind_for(&verdict, true), Some(MentionKind::Gift));
+        let entry = entry_for(&anon, MentionKind::Gift, 0);
+        assert_eq!(notice_text(&entry).headline, "An anonymous gifter gifted you a sub in maefae");
+    }
+
     #[test]
     fn a_privmsg_username_is_the_login_not_the_display_name() {
         let msg = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");

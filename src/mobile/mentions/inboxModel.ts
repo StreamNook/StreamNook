@@ -14,7 +14,7 @@ import type {
 export interface FaceInfo {
   name: string;
   color: string | null;
-  kind: 'mention' | 'reply' | 'word' | 'whisper';
+  kind: MentionEntry['kind'] | 'whisper';
 }
 
 /** The chips shown before Rust's first answer. Whispers join only when Rust

@@ -3200,8 +3200,27 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // Use dynamic spacing from user settings
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
+    // A sub gifted to you: Rust stamps the card a mention (chat_rules
+    // `gift_to_me`), so it wears a mention's edge, flash and hold like any
+    // row that names you.
+    const giftEdge = isMentioned ? chatDesign?.mention_color ?? '#ff4444' : null;
+    const giftHold =
+      giftEdge && chatDesign?.mention_hold === true
+        ? mentionHoldBackground(giftEdge, Math.max(0, Math.min(100, chatHighlights?.appearance?.opacity ?? 20)))
+        : undefined;
+    const giftFrame: React.CSSProperties = giftEdge
+      ? ({
+          borderLeftColor: giftEdge,
+          borderLeftWidth: '4px',
+          borderLeftStyle: 'solid',
+          '--flash-accent-color': giftEdge,
+          ...(giftHold ? { backgroundImage: giftHold } : {}),
+        } as React.CSSProperties)
+      : {};
+    const giftFlash = giftEdge && chatDesign?.mention_animation !== false ? ' animate-mention-flash' : '';
+
     return (
-      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('subscription-gradient')}${sharedCardClass}`} style={{ ...eventCardStyle, ...sharedCardVars, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('subscription-gradient')}${sharedCardClass}${giftFlash}`} style={{ ...eventCardStyle, ...sharedCardVars, ...giftFrame, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             {/* Prime logo for Prime subs, Twitch's gift for other subs */}

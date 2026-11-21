@@ -2,9 +2,9 @@
 //! other way.
 //!
 //! `Query.currentUser.notifications` is a plain authenticated field: raw query
-//! text, no persisted hash, no integrity token, and it resolves with the same
-//! app-token + web-client-id pairing `auth_proxy` uses for
-//! `currentUser { hasTurbo }`.
+//! text, no persisted hash, no integrity token, read with the viewer's twitch.tv
+//! web session under the web client id (`twitch_web_gql`), the same session
+//! `auth_proxy`'s `currentUser { hasTurbo }` callers pass.
 //!
 //! Scope is deliberately narrow: this ingests by exception rather than
 //! mirroring the bell. Two kinds of row are taken:
@@ -38,9 +38,7 @@ use tauri::Emitter;
 use tauri::async_runtime::JoinHandle;
 
 use crate::models::settings::Settings;
-use crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID;
 use crate::services::cache_service;
-use crate::services::twitch_service::TwitchService;
 
 /// Gift subs are not time-critical and the feed is cheap, but it is still a
 /// network call on a background timer. Five minutes keeps tray idle honest.
@@ -69,6 +67,9 @@ static REWARDS_ON: AtomicBool = AtomicBool::new(false);
 /// Set when rewards are switched on, so the rows that piled up while they
 /// were off are recorded silently instead of announced all at once.
 static RESEED_REWARDS: AtomicBool = AtomicBool::new(false);
+/// The last poll error logged, so a poll that keeps failing the same way logs
+/// it once rather than every five minutes.
+static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// One span of a notification body. Twitch sends `**bold**` markdown, and the
 /// bolded runs are the nouns worth emphasising (gifter, tier, channel), so the
@@ -303,27 +304,22 @@ const QUERY: &str = r#"query SNGiftSubs($first: Int!) {
   }
 }"#;
 
+/// The bell is the viewer's own data, so it is read as the viewer's twitch.tv
+/// web session. StreamNook's own login token is refused under the web client
+/// id ("The Authorization token is invalid"), which left this poll failing on
+/// every tick, silently, until 2026-11-20.
 async fn fetch_feed(first: u32) -> Result<serde_json::Value> {
-    let token = TwitchService::get_token().await?;
-    let client = crate::services::http::client().clone();
-
+    let token = crate::services::twitch_web_gql::app_web_session()
+        .await
+        .ok_or_else(|| anyhow!("not signed in to Twitch"))?;
     let body = serde_json::json!({
         "operationName": "SNGiftSubs",
         "query": QUERY,
         "variables": { "first": first },
     });
-
-    let resp: serde_json::Value = client
-        .post("https://gql.twitch.tv/gql")
-        .header("Authorization", format!("OAuth {token}"))
-        .header("Client-ID", TWITCH_WEB_CLIENT_ID)
-        .timeout(Duration::from_secs(10))
-        .json(&body)
-        .send()
-        .await?
-        .json()
-        .await?;
-
+    let resp = crate::services::twitch_web_gql::post(Some(&token), body, "OnsiteNotif")
+        .await
+        .map_err(|e| anyhow!(e))?;
     if let Some(errors) = resp.get("errors") {
         return Err(anyhow!("gql errors: {errors}"));
     }
@@ -444,6 +440,15 @@ pub async fn collect_new(gifts: bool, rewards: bool) -> Result<Collected> {
     Ok(Collected { gifts: fresh, rewards: fresh_rewards })
 }
 
+/// Whether the chat caught this gift already: a gift to you in a chat you had
+/// open files in the inbox from its USERNOTICE (`mention_inbox`), minutes
+/// before the bell lists it.
+fn caught_in_chat(gift: &GiftSubNotification) -> bool {
+    let Some(channel) = gift.channel_login.as_deref() else { return false };
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(&gift.created_at) else { return false };
+    crate::services::mention_inbox::chat_caught_gift(channel, at.timestamp_millis())
+}
+
 pub fn init(app: AppHandle) {
     let _ = APP.set(app);
 }
@@ -493,6 +498,7 @@ fn spawn_poll() -> JoinHandle<()> {
             let rewards = REWARDS_ON.load(Ordering::Acquire);
             match collect_new(gifts, rewards).await {
                 Ok(found) => {
+                    *LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = None;
                     if !found.gifts.is_empty() {
                         info!("[OnsiteNotif] {} new gift sub(s)", found.gifts.len());
                     }
@@ -500,7 +506,9 @@ fn spawn_poll() -> JoinHandle<()> {
                         info!("[OnsiteNotif] {} new reward row(s)", found.rewards.len());
                     }
                     if let Some(app) = APP.get() {
-                        for item in found.gifts {
+                        // A gift the chat already showed (and filed in the
+                        // inbox the moment it happened) is not announced twice.
+                        for item in found.gifts.into_iter().filter(|g| !caught_in_chat(g)) {
                             let _ = app.emit("gift-sub-received", &item);
                         }
                         // A badge earned means the missing-badges list is out
@@ -513,9 +521,18 @@ fn spawn_poll() -> JoinHandle<()> {
                         }
                     }
                 }
-                // A failed poll is not fatal and must not kill the loop: an
-                // expired token refreshes inside get_token on the next tick.
-                Err(e) => debug!("[OnsiteNotif] poll failed: {e}"),
+                // A failed poll is not fatal and must not kill the loop. It is
+                // logged where a release log shows it, once per distinct
+                // error: a refusal logged at debug hid this poll being dead
+                // for two months.
+                Err(e) => {
+                    let text = e.to_string();
+                    let mut last = LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner());
+                    if last.as_deref() != Some(text.as_str()) {
+                        warn!("[OnsiteNotif] poll failed: {text}");
+                        *last = Some(text);
+                    }
+                }
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }

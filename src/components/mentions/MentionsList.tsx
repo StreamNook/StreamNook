@@ -27,6 +27,7 @@ const KIND_WORDS: Record<MentionKind, string> = {
   mention: 'mentioned you',
   reply: 'replied to you',
   word: 'matched a highlight',
+  gift: 'gifted you a sub',
 };
 
 const timeLabel = (atMs: number, now: number): string =>

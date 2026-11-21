@@ -35,6 +35,12 @@ describe('inbox words', () => {
     expect(foldedWords(entry(), 6)).toBe('6 identical mentions');
     expect(foldedWords(entry({ kind: 'reply' }), 2)).toBe('2 identical replies');
     expect(foldedWords(entry({ kind: 'word' }), 3)).toBe('3 identical messages');
+    expect(foldedWords(entry({ kind: 'gift' }), 2)).toBe('2 identical gifts');
+  });
+
+  it('says a gift is a sub gifted to you, and where', () => {
+    const gift = entry({ kind: 'gift', room: 'maefae', channel_login: 'maefae', text: 'Gifter gifted a Tier 1 sub to Rainy!' });
+    expect(whereWords(gift)).toEqual({ lead: 'gifted you a sub in', place: 'maefae' });
   });
 
   it('names where it was said, by the channel and not the room key', () => {
