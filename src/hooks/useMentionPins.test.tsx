@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
-// SN-284: the pins hook asks Rust only while Pin mentions is on, draws only
-// the latest request's answer, clears at once when the chat's rooms change,
-// and asks again once, a little after the earliest pin's end.
+// SN-284: the pins hook asks Rust only while Pin mentions is on, draws only the
+// latest request's answer, clears at once when its surface changes, and
+// registers the surface it is mounted as (one token per mount).
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// The store asks for settings as it loads: answer nothing.
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }));
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
@@ -26,55 +25,48 @@ vi.mock('../utils/platform', () => ({
 
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
-import { nextRefreshDelay, samePins, useMentionPins } from './useMentionPins';
+import { pinSurfaces } from '../utils/pinSurfaces';
+import { samePins, useMentionPins, usePinSurface } from './useMentionPins';
+import { samplePin } from '../components/settings/pinSamples';
 import type { MentionPin, MentionPins } from '../types';
 
-const pin = (id: string, until: number, run = 1): MentionPin => ({
-  entry: {
-    id,
-    platform: 'twitch',
-    room: 'xqc',
-    channel_login: 'xqc',
-    sender_id: '1',
-    sender_login: 'a',
-    sender_name: 'A',
-    text: '@you',
-    kind: 'mention',
-    at_ms: 0,
-    read: true,
-    removed: false,
-  },
-  until_ms: until,
-  run,
+const pin = (n: number, over: Partial<MentionPin> = {}): MentionPin => ({
+  ...samplePin(n, 'mention', `u${n}`, '#fff', `m${n}`, '9:00 PM'),
+  ...over,
 });
-
-describe('nextRefreshDelay', () => {
-  it('waits until just past the earliest end, on the clock Rust answered with', () => {
-    expect(nextRefreshDelay([pin('a', 9_000), pin('b', 4_000)], 1_000)).toBe(3_050);
-    expect(nextRefreshDelay([pin('a', 500)], 1_000)).toBe(50);
-    expect(nextRefreshDelay([], 1_000)).toBeNull();
-  });
-});
+const answer = (pins: MentionPin[], revision = 1): MentionPins => ({ revision, pins, max: 10 });
 
 describe('samePins', () => {
-  it('is false when an id, an end or a copy count differs', () => {
-    expect(samePins([pin('a', 1)], [pin('a', 1)])).toBe(true);
-    expect(samePins([pin('a', 1)], [pin('b', 1)])).toBe(false);
-    expect(samePins([pin('a', 1)], [pin('a', 2)])).toBe(false);
-    expect(samePins([pin('a', 1, 1)], [pin('a', 1, 2)])).toBe(false);
-    expect(samePins([pin('a', 1)], [])).toBe(false);
+  it('is false when an id, a row revision, a clock state or a copy count differs', () => {
+    expect(samePins([pin(1)], [pin(1)])).toBe(true);
+    expect(samePins([pin(1)], [pin(2)])).toBe(false);
+    expect(samePins([pin(1)], [pin(1, { rev: 99 })])).toBe(false);
+    expect(samePins([pin(1)], [pin(1, { clock: 'none' })])).toBe(false);
+    expect(samePins([pin(1)], [pin(1, { run: 2 })])).toBe(false);
+    expect(samePins([pin(1)], [])).toBe(false);
   });
 });
 
 let host: HTMLElement;
 let root: Root;
 const out: { seen: MentionPin[] } = { seen: [] };
-const report = (pins: MentionPin[]) => {
-  out.seen = pins;
-};
 
-function Probe({ rooms }: { rooms: string }) {
-  report(useMentionPins(rooms));
+function Probe({ surface }: { surface: string | null }) {
+  out.seen = useMentionPins(surface).pins;
+  return null;
+}
+
+function Surface({ id }: { id: string }) {
+  usePinSurface({
+    id,
+    rooms: [{ provider: 'twitch', channel: 'xqc' }],
+    active: true,
+    shown: true,
+    mode: '',
+    strips_only: false,
+    over_video: false,
+    opens: ['twitch'],
+  });
   return null;
 }
 
@@ -107,68 +99,53 @@ afterEach(() => {
 describe('useMentionPins', () => {
   it('asks nothing while Pin mentions is off', async () => {
     setPinSetting(false);
-    act(() => root.render(<Probe rooms="xqc" />));
+    act(() => root.render(<Probe surface="main-chat" />));
     await flush();
     expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'get_mention_pins')).toBe(false);
     expect(out.seen).toEqual([]);
   });
 
-  it('draws only the latest answer, and clears when the rooms change', async () => {
+  it('asks for its surface by page and id', async () => {
+    setPinSetting(true);
+    vi.mocked(invoke).mockResolvedValue(answer([pin(1)]));
+    act(() => root.render(<Probe surface="dock" />));
+    await flush();
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('get_mention_pins', {
+      page: String(performance.timeOrigin),
+      surface: 'dock',
+    });
+    expect(out.seen.map((p) => p.entry.id)).toEqual(['sample-pin-1']);
+  });
+
+  it('draws only the latest answer, and clears when the surface changes', async () => {
     setPinSetting(true);
     const answers: Array<(v: MentionPins) => void> = [];
     vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => answers.push(resolve as never)));
-    act(() => root.render(<Probe rooms="xqc" />));
-    act(() => root.render(<Probe rooms="kick:other" />));
+    act(() => root.render(<Probe surface="main-chat" />));
     await flush();
-    expect(answers.length).toBe(2);
-    // The second room's answer lands first, then the first room's, late.
-    await act(async () => answers[1]({ pins: [pin('new', 99_000)], now_ms: 1_000 }));
-    await act(async () => answers[0]({ pins: [pin('old', 99_000)], now_ms: 1_000 }));
-    expect(out.seen.map((p) => p.entry.id)).toEqual(['new']);
-    // Moving to a room with no answer yet shows nothing from the last one.
-    vi.mocked(invoke).mockImplementation(() => new Promise(() => {}));
-    act(() => root.render(<Probe rooms="other" />));
+    act(() => root.render(<Probe surface="dock" />));
+    await flush();
+    // The first surface's slow answer lands after the second was asked: dropped.
+    await act(async () => answers[0](answer([pin(1)])));
+    expect(out.seen).toEqual([]);
+    await act(async () => answers[answers.length - 1](answer([pin(2)])));
+    expect(out.seen.map((p) => p.entry.id)).toEqual(['sample-pin-2']);
+    act(() => root.render(<Probe surface="main-chat" />));
     expect(out.seen).toEqual([]);
   });
+});
 
-  it('draws the latest ask for the same rooms when an older answer lands last', async () => {
-    setPinSetting(true);
-    const answers: Array<(v: MentionPins) => void> = [];
-    vi.mocked(invoke).mockImplementation(
-      (cmd) => (cmd === 'get_mention_pins' ? new Promise((resolve) => answers.push(resolve as never)) : Promise.resolve(null)) as never,
-    );
-    act(() => root.render(<Probe rooms="xqc" />));
-    await flush();
-    // The window comes back: a second ask for the same rooms.
-    act(() => {
-      window.dispatchEvent(new Event('focus'));
-    });
-    await flush();
-    expect(answers.length).toBe(2);
-    await act(async () => answers[1]({ pins: [pin('fresh', 99_000)], now_ms: 1_000 }));
-    await act(async () => answers[0]({ pins: [pin('dismissed', 99_000)], now_ms: 1_000 }));
-    expect(out.seen.map((p) => p.entry.id)).toEqual(['fresh']);
-  });
-
-  it('asks again once, just past the earliest end', async () => {
-    vi.useFakeTimers();
-    setPinSetting(true);
-    vi.mocked(invoke)
-      .mockResolvedValueOnce({ pins: [pin('a', 6_000), pin('b', 3_000)], now_ms: 1_000 } satisfies MentionPins)
-      .mockResolvedValue({ pins: [], now_ms: 3_100 } satisfies MentionPins);
-    act(() => root.render(<Probe rooms="xqc" />));
-    await flush();
-    expect(out.seen.length).toBe(2);
-    expect(invoke).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      vi.advanceTimersByTime(2_049);
-    });
-    expect(invoke).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      vi.advanceTimersByTime(2);
-    });
-    await flush();
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(out.seen).toEqual([]);
+describe('usePinSurface', () => {
+  it('registers once per mount, with its own token, and removes only its own on unmount', () => {
+    pinSurfaces.setEnabled(false);
+    const before = pinSurfaces.size();
+    act(() => root.render(<Surface id="main-chat" />));
+    expect(pinSurfaces.size()).toBe(before + 1);
+    const tokens = pinSurfaces.peek().map((s) => s.token);
+    act(() => root.render(<Surface id="main-chat" />));
+    expect(pinSurfaces.peek().map((s) => s.token)).toEqual(tokens);
+    act(() => root.unmount());
+    expect(pinSurfaces.size()).toBe(before);
+    root = createRoot(host);
   });
 });

@@ -1,4 +1,5 @@
 import type { ProviderCategory, ProviderId } from './providers';
+import type { BackendChatMessage } from '../services/twitchChat';
 
 export interface AudioBoostSettings {
   enabled: boolean;
@@ -987,19 +988,40 @@ export interface MentionSettings {
 // `gift`: someone gifted you a sub (filed from the chat's gift notice).
 export type MentionKind = 'mention' | 'reply' | 'word' | 'gift';
 
-/** One pinned mention (SN-284, Rust `mention_inbox::MentionPin`): the newest
- *  copy of a message, when its pin ends (Rust's clock) and how many copies of
- *  the same message it stands for. */
-export interface MentionPin {
-  entry: MentionEntry;
-  until_ms: number;
-  run: number;
+/** Where a pin's chat is, when it is not the surface's own chat (Rust
+ *  `mention_pins::ChannelMark`). */
+export interface MentionPinChannelMark {
+  room: string;
+  platform: string;
+  channel: string;
 }
 
-/** `get_mention_pins`: newest first, and Rust's clock when read. */
+/** One pinned mention as a surface draws it (Rust `mention_pins::PinOut`). */
+export interface MentionPin {
+  /** The inbox entry (the newest copy of the message): opener data, kind, time. */
+  entry: MentionEntry;
+  /** The `ChatMessage`-shaped row Rust built from the filed message, with its
+   *  badges' art resolved (`badges_resolved`). Drawn by the shell's own row. */
+  row: BackendChatMessage;
+  channel_mark: MentionPinChannelMark | null;
+  /** `running`: counting down; `held`: not counting right now; `none`: until closed. */
+  clock: 'running' | 'held' | 'none';
+  /** The use time left; null for an until-closed pin. */
+  left_ms: number | null;
+  /** How many copies of the same message this pin stands for. */
+  run: number;
+  /** The row's hash: the shell redraws the row when it changes. */
+  rev: number;
+  /** The row shows its day: it was not filed today. */
+  day: boolean;
+}
+
+/** `get_mention_pins`: oldest first. */
 export interface MentionPins {
+  revision: number;
   pins: MentionPin[];
-  now_ms: number;
+  /** Most at once. */
+  max: number;
 }
 
 export interface MentionEntry {

@@ -82,14 +82,39 @@ function reportForeground(foreground: boolean): void {
 // as being read only then, so a whisper landing while the stream plays in PiP
 // or the phone is locked still notifies and stays unread. Unlike
 // set_app_foreground, PiP does not count.
+//
+// What Rust holds counts only once the invoke has succeeded (the pinned
+// mentions' clocks read it, and a report that never landed must not look sent):
+// `lastInteractive` is set on success, one report is in flight at a time, and a
+// failed one is tried again on the next viewer input (retryInteractiveReport).
 let lastInteractive: boolean | null = null;
+let wantedInteractive: boolean | null = null;
+let interactiveInFlight = false;
+function sendInteractive(): void {
+  const interactive = wantedInteractive;
+  if (interactive === null || interactive === lastInteractive || interactiveInFlight) return;
+  interactiveInFlight = true;
+  invoke('set_app_interactive', { interactive })
+    .then(() => {
+      lastInteractive = interactive;
+      interactiveInFlight = false;
+      // The wanted value moved while this one was in flight.
+      sendInteractive();
+    })
+    .catch((err) => {
+      interactiveInFlight = false;
+      Logger.debug('[Lifecycle] set_app_interactive failed:', err);
+    });
+}
 function reportInteractive(override?: boolean): void {
-  const interactive = override ?? (document.visibilityState === 'visible' && !inPictureInPicture());
-  if (interactive === lastInteractive) return;
-  lastInteractive = interactive;
-  void invoke('set_app_interactive', { interactive }).catch((err) => {
-    Logger.debug('[Lifecycle] set_app_interactive failed:', err);
-  });
+  wantedInteractive = override ?? (document.visibilityState === 'visible' && !inPictureInPicture());
+  sendInteractive();
+}
+
+/** Sends the wanted `set_app_interactive` value again when the last report
+ *  failed. Called on viewer input while Pin mentions is on. */
+export function retryInteractiveReport(): void {
+  sendInteractive();
 }
 
 async function onHidden(): Promise<void> {

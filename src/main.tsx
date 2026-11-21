@@ -97,6 +97,13 @@ localStorage.removeItem('streamnook_whatsnew_cache_v2');
 // it renders; a reloaded page must not keep the old page's claim.
 void import('./utils/whisperClaim').then((m) => m.clearWhisperClaim());
 
+// Pinned mentions (SN-284): while the setting is on, this window reports its
+// input and its chat stacks to Rust; while it is off nothing is sent. The emote
+// palette reports input only (Rust credits it to the window it serves).
+void import('./utils/pinPresence').then((m) =>
+  m.startPinPresence({ surfaces: !window.location.hash.startsWith('#/emote-palette') }),
+);
+
 // Route based on URL hash. Profile-card windows, the StreamNook MultiChat
 // popout, and ui-plugin popout windows share the same bundle as the main App;
 // main.tsx picks the root component to render.
