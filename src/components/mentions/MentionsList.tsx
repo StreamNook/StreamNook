@@ -4,7 +4,7 @@
 // state and the counts; this draws a page of them and sends what the viewer
 // does. The main window shows the same inbox in the Dynamic Island.
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Archive, BellOff, Bell, Check, CheckCheck, Inbox, Trash2, X } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
@@ -14,6 +14,7 @@ import { WhisperParts } from '../whispers/WhisperParts';
 import { useAppStore } from '../../stores/AppStore';
 import { toggleMentionChatMuted, useInboxCounts } from '../../stores/mentionInboxStore';
 import { useInboxView } from '../inbox/useInboxView';
+import { mentionRowIdsOf, useInboxFocus } from '../inbox/useInboxFocus';
 import { dropRows, foldedLine, readRows, rowUnread } from '../inbox/islandHistory';
 import { isProviderId } from '../../types/providers';
 import type { InboxItem, MentionEntry, MentionKind, WhisperRowMeta } from '../../types';
@@ -55,9 +56,11 @@ interface MentionRowProps {
   onOpen: (entry: MentionEntry) => void;
   onRemove: (row: MentionRowView) => void;
   onToggleMute: (entry: MentionEntry) => void;
+  /** A pinned mention asked for this row (SN-284): drawn highlighted. */
+  focused?: boolean;
 }
 
-function MentionRow({ row, now, showLogo, muted, onOpen, onRemove, onToggleMute }: MentionRowProps) {
+function MentionRow({ row, now, showLogo, muted, onOpen, onRemove, onToggleMute, focused = false }: MentionRowProps) {
   const entry = row.entry;
   const read = !row.unread;
   // Rust stores the readable color the chat row shows; drawn as is.
@@ -70,7 +73,8 @@ function MentionRow({ row, now, showLogo, muted, onOpen, onRemove, onToggleMute 
       onClick={() => onOpen(entry)}
       onKeyDown={openOnKey(() => onOpen(entry))}
       data-mention-row={entry.id}
-      className={ROW_CLASS}
+      data-mention-ids={mentionRowIdsOf(row).join(' ')}
+      className={`${ROW_CLASS}${focused ? ' bg-accent/15 ring-1 ring-inset ring-accent/40' : ''}`}
     >
       {/* Unread dot, on the first line's cap height. Read rows keep the
           column so nothing shifts when a row is read. */}
@@ -312,6 +316,16 @@ export function MentionsList({ onOpen, headerEnd, compact = false }: MentionsLis
     [inbox.rows],
   );
   const anyUnread = unread > 0 || inbox.rows.some(rowUnread);
+  // A pinned mention from another chat opens here at its entry (SN-284).
+  const listRef = useRef<HTMLDivElement>(null);
+  const focusedRow = useInboxFocus({
+    rows: inbox.rows,
+    hasMore: inbox.hasMore,
+    loadOlder: inbox.loadOlder,
+    loaded: inbox.loaded,
+    container: listRef,
+    active: true,
+  });
 
   const iconButton =
     'flex h-8 w-8 items-center justify-center rounded-lg text-textSecondary transition-colors hover:bg-surface-hover hover:text-textPrimary disabled:pointer-events-none disabled:opacity-40';
@@ -369,7 +383,7 @@ export function MentionsList({ onOpen, headerEnd, compact = false }: MentionsLis
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin" onScroll={onScroll}>
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto scrollbar-thin" onScroll={onScroll}>
         {inbox.loaded && inbox.rows.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-10 text-center">
             <Inbox size={36} className="mb-3 text-accent/40" />
@@ -388,6 +402,7 @@ export function MentionsList({ onOpen, headerEnd, compact = false }: MentionsLis
                   now={now}
                   showLogo={mixed}
                   muted={mutedSet.has(row.entry.room.toLowerCase())}
+                  focused={focusedRow === row.row_id}
                   onOpen={onOpen}
                   onRemove={removeMention}
                   onToggleMute={toggleMute}

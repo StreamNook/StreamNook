@@ -60,6 +60,17 @@ export interface PinSurfaceRegistryDeps {
   cancel?: (handle: unknown) => void;
 }
 
+/** Whether a mention that pinned on `pinSurface` is already drawn: that
+ *  surface is one of the shown surfaces of this window. Rust sets
+ *  `pin_surface` on the arrival at filing, so the arrival card stays away from
+ *  a mention the viewer is looking at as a pin. */
+export function arrivalPinnedOnScreen(
+  pinSurface: string | null | undefined,
+  surfaces: ReadonlyArray<{ id: string; shown: boolean }>,
+): boolean {
+  return !!pinSurface && surfaces.some((s) => s.id === pinSurface && s.shown);
+}
+
 /** The most visible ids one surface reports (Rust truncates at the same size). */
 const VISIBLE_MAX = 64;
 

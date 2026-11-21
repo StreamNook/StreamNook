@@ -1,6 +1,6 @@
 // SN-284: the window's pin surface map and its one debounced call.
 import { describe, expect, it, vi } from 'vitest';
-import { createPinSurfaceRegistry, type PinSurfaceCall, type PinSurfaceSpec } from './pinSurfaces';
+import { arrivalPinnedOnScreen, createPinSurfaceRegistry, type PinSurfaceCall, type PinSurfaceSpec } from './pinSurfaces';
 
 const spec = (id: string, over: Partial<PinSurfaceSpec> = {}): PinSurfaceSpec => ({
   id,
@@ -140,5 +140,21 @@ describe('pin surface registry', () => {
     expect(() => reg.setEnabled(true)).not.toThrow();
     await Promise.resolve();
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('arrivalPinnedOnScreen', () => {
+  const surfaces = [
+    { id: 'phone-watch', shown: true },
+    { id: 'phone-chats', shown: false },
+  ];
+  it('skips the card for a mention pinned on a surface that is in front', () => {
+    expect(arrivalPinnedOnScreen('phone-watch', surfaces)).toBe(true);
+  });
+  it('shows the card when the pin surface is not in front, unknown, or there is none', () => {
+    expect(arrivalPinnedOnScreen('phone-chats', surfaces)).toBe(false);
+    expect(arrivalPinnedOnScreen('dock', surfaces)).toBe(false);
+    expect(arrivalPinnedOnScreen(null, surfaces)).toBe(false);
+    expect(arrivalPinnedOnScreen(undefined, surfaces)).toBe(false);
   });
 });

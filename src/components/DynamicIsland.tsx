@@ -21,6 +21,8 @@ import {
 } from '../utils/noticeReport';
 import { MENTION_NOTIFY_EVENT, toggleMentionChatMuted, useInboxCounts } from '../stores/mentionInboxStore';
 import { useInboxView } from './inbox/useInboxView';
+import { mentionRowIdsOf, useInboxFocus } from './inbox/useInboxFocus';
+import { useMentionFocus } from '../stores/mentionFocusStore';
 import {
     dropRows,
     foldedLine,
@@ -2020,6 +2022,26 @@ const DynamicIsland = () => {
         () => mergeIslandHistory(notifications, inbox.rows, inbox.hasMore),
         [notifications, inbox.rows, inbox.hasMore],
     );
+    // A pinned mention from another chat opens this history at its entry
+    // (SN-284): expanded, scrolled to the row and highlighting it.
+    const historyRef = useRef<HTMLDivElement>(null);
+    const mentionFocus = useMentionFocus();
+    const mentionFocusNonce = mentionFocus?.nonce;
+    useEffect(() => {
+        if (mentionFocusNonce !== undefined && !IS_MOBILE) setIsExpanded(true);
+    }, [mentionFocusNonce]);
+    const focusedMentionRow = useInboxFocus({
+        rows: inbox.rows,
+        hasMore: inbox.hasMore,
+        loadOlder: inbox.loadOlder,
+        loaded: inbox.loaded,
+        container: historyRef,
+        active: isExpanded,
+    });
+    const focusedMentionIds = useMemo(() => {
+        const row = focusedMentionRow === null ? null : inbox.rows.find((r) => r.row_id === focusedMentionRow);
+        return row ? new Set(mentionRowIdsOf(row)) : null;
+    }, [focusedMentionRow, inbox.rows]);
     // A platform mark beside the chat only where mentions from more than one
     // platform share the list.
     const mentionPlatformsMix = useMemo(
@@ -2453,6 +2475,7 @@ const DynamicIsland = () => {
 
                                 {/* Notifications List */}
                                 <div
+                                    ref={historyRef}
                                     // Rows running past the rim fade out rather
                                     // than being cut; the list's bottom padding
                                     // is what sits under the fade at the end.
@@ -2508,8 +2531,17 @@ const DynamicIsland = () => {
                                                         e.preventDefault();
                                                         open();
                                                     }}
+                                                    data-mention-ids={
+                                                        notification.type === 'mention'
+                                                            ? [notification.data.id, ...notification.folded.map((f) => f.id)].join(' ')
+                                                            : undefined
+                                                    }
                                                     className={`sn-notif-row group ${
                                                         notification.read ? '' : 'sn-notif-row--unread'
+                                                    }${
+                                                        notification.type === 'mention' && focusedMentionIds?.has(notification.data.id)
+                                                            ? ' bg-accent/15'
+                                                            : ''
                                                     }`}
                                                 >
                                                     {notification.type === 'mention' ? (

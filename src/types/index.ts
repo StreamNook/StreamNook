@@ -1072,6 +1072,9 @@ export type InboxFilterId = 'all' | 'mentions' | 'highlights' | 'whispers';
 export interface MentionArrival {
   entry: MentionEntry;
   avatar: string | null;
+  /** The pin surface that took this mention as a pin (SN-284), when it pinned:
+   *  a surface showing it on screen skips the card, which would say it twice. */
+  pin_surface?: string | null;
 }
 
 /** `get_mention_inbox` (commands/mention_inbox.rs `MentionPage`). */

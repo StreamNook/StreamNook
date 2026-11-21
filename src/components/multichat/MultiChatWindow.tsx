@@ -52,6 +52,7 @@ import { CHAT_PROVIDERS, PROVIDERS, isProviderId, type ProviderId } from '../../
 import { ProviderLogo } from '../ProviderLogo';
 import { BlendedChatPane } from './BlendedChatPane';
 import { MentionsList } from '../mentions/MentionsList';
+import { useMentionFocus } from '../../stores/mentionFocusStore';
 import { mentionRoomKey, requestMentionJump } from '../../stores/mentionJumpStore';
 import { useVisibleMentionRooms } from '../../stores/mentionInboxStore';
 import ModRoomPane from '../modroom/ModRoomPane';
@@ -562,6 +563,15 @@ export default function MultiChatWindow() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(initial.layoutMode);
   const [isBlendedMode, setIsBlendedMode] = useState(initial.isBlendedMode);
   const [isMentionsMode, setIsMentionsMode] = useState(initial.isMentionsMode);
+  // A pinned mention from another chat (SN-284) opens the Mentions mode at its entry.
+  const mentionFocus = useMentionFocus();
+  const mentionFocusNonce = mentionFocus?.nonce;
+  const [seenMentionFocus, setSeenMentionFocus] = useState(mentionFocusNonce);
+  if (mentionFocusNonce !== undefined && mentionFocusNonce !== seenMentionFocus) {
+    setSeenMentionFocus(mentionFocusNonce);
+    setIsMentionsMode(true);
+    setIsBlendedMode(false);
+  }
   // Custom split layout. Null = the column presets (layoutMode). The refs let
   // selectChannel read the live tree without re-creating its callback.
   const [layoutTree, setLayoutTree] = useState<SplitNode | null>(initial.layoutTree);

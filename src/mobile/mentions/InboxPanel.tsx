@@ -8,6 +8,7 @@
 // attaches the senders' pictures it has. This draws it, relays taps, and marks
 // the mention rows that were on screen read when it closes. A whisper
 // conversation is read only by opening it.
+import { mentionRowIdsOf, useInboxFocus } from '../../components/inbox/useInboxFocus';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Archive, ArrowLeft, BellSlash, Bell, Check, Trash } from 'phosphor-react';
 import { CheckCheck, ChevronDown } from 'lucide-react';
@@ -93,7 +94,9 @@ const MentionRow: React.FC<{
   now: number;
   mixed: boolean;
   onHold: (row: InboxItem) => void;
-}> = React.memo(({ row, now, mixed, onHold }) => {
+  /** A pinned mention asked for this row (SN-284). */
+  focused?: boolean;
+}> = React.memo(({ row, now, mixed, onHold, focused = false }) => {
   const [open, setOpen] = useState(false);
   const entry = row.entry;
   const where = whereWords(entry);
@@ -103,7 +106,12 @@ const MentionRow: React.FC<{
     () => openInboxRow(row),
   );
   return (
-    <div data-inbox-row={row.row_id} data-inbox-ids={seenIdsOf(row).join(' ')}>
+    <div
+      data-inbox-row={row.row_id}
+      data-inbox-ids={seenIdsOf(row).join(' ')}
+      data-mention-ids={mentionRowIdsOf(row).join(' ')}
+      className={focused ? 'bg-accent/15' : undefined}
+    >
       <button type="button" className={ROW_BUTTON} {...press}>
         <span className="mt-1 shrink-0 block">
           <InboxFace face={faceOfEntry(entry)} avatar={row.avatar} size={32} dim={read} />
@@ -404,6 +412,15 @@ export const InboxPanel: React.FC<{
   }, []);
 
   const list = view?.rows ?? [];
+  // A pinned mention from another chat opens this inbox at its entry (SN-284).
+  const focusedRow = useInboxFocus({
+    rows: list,
+    hasMore: !!view?.has_more,
+    loadOlder: loadMore,
+    loaded: !!view,
+    container: scrollRef,
+    active: true,
+  });
   const mixed = new Set(mentionItems(list).map((r) => roomProvider(r.entry.room))).size > 1;
   const unread = view?.unread_total ?? 0;
   const chips = chipsOf(view);
@@ -436,7 +453,7 @@ export const InboxPanel: React.FC<{
       {!view && failed && <EmptyNote text="The inbox did not load." hint="Try again in a moment." />}
       {list.map((r) =>
         r.kind === 'mention' ? (
-          <MentionRow key={r.row_id} row={r} now={now} mixed={mixed} onHold={setHeld} />
+          <MentionRow key={r.row_id} row={r} now={now} mixed={mixed} onHold={setHeld} focused={focusedRow === r.row_id} />
         ) : (
           <WhisperRow key={r.row_id} row={r} now={now} roomy={filter === 'whispers'} onHold={setHeld} />
         ),

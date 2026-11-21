@@ -26,6 +26,10 @@ export interface ScrollToMessageOptions {
   /** Look only inside this element (a chat pane). A phone keeps a hidden
    *  surface mounted with the same room, whose row would match first. */
   root?: ParentNode | null;
+  /** The height at the top of the list that the floating top-of-chat stack
+   *  covers (its drawn bottom minus the list's top). The message lands in the
+   *  part below it, never under a card (SN-284). Default 0. */
+  topInset?: number;
 }
 
 /** How long a jumped-to row flashes. Matches the CSS animation. */
@@ -55,10 +59,11 @@ export function flashChatMessage(messageId: string, root: ParentNode | null = nu
   }, JUMP_FLASH_MS + 100);
 }
 
-function targetFor(
+export function targetFor(
   container: HTMLElement,
   el: HTMLElement,
   align: 'start' | 'center' | 'end',
+  topInset = 0,
 ): number {
   // Rect-based rather than offsetTop: offsetTop is relative to the nearest
   // positioned ancestor, which is not guaranteed to be the scroller. Rects are
@@ -68,12 +73,14 @@ function targetFor(
   const offsetWithin = eRect.top - cRect.top + container.scrollTop;
 
   let target: number;
+  // The visible part of the list is what the stack leaves below it.
+  const inset = Math.max(0, Math.min(topInset, container.clientHeight));
   if (align === 'start') {
-    target = offsetWithin;
+    target = offsetWithin - inset;
   } else if (align === 'end') {
     target = offsetWithin - container.clientHeight + eRect.height;
   } else {
-    target = offsetWithin - container.clientHeight / 2 + eRect.height / 2;
+    target = offsetWithin - inset - (container.clientHeight - inset) / 2 + eRect.height / 2;
   }
   return Math.max(0, Math.min(target, container.scrollHeight - container.clientHeight));
 }
@@ -91,7 +98,7 @@ export function scrollChatToMessage(
   messageId: string,
   options?: ScrollToMessageOptions,
 ): boolean {
-  const { align = 'center', smooth = true, flash = false, root = null } = options ?? {};
+  const { align = 'center', smooth = true, flash = false, root = null, topInset = 0 } = options ?? {};
   const scope = root ?? document;
 
   const el = scope.querySelector<HTMLElement>(
@@ -103,7 +110,7 @@ export function scrollChatToMessage(
   if (!container) return false;
 
   const behavior: ScrollBehavior = smooth ? 'smooth' : 'auto';
-  container.scrollTo({ top: targetFor(container, el, align), behavior });
+  container.scrollTo({ top: targetFor(container, el, align, topInset), behavior });
   if (flash) flashChatMessage(messageId, root);
 
   // One correction pass, and it is not optional on mobile.
@@ -119,7 +126,7 @@ export function scrollChatToMessage(
     );
     const c = again?.closest<HTMLElement>('.overflow-y-auto');
     if (!again || !c) return;
-    const target = targetFor(c, again, align);
+    const target = targetFor(c, again, align, topInset);
     // Only correct a drift worth correcting; a second glide over a few pixels
     // reads as a wobble.
     if (Math.abs(c.scrollTop - target) > 8) {

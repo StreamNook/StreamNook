@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
+import { arrivalPinnedOnScreen, pinSurfaces } from '../../utils/pinSurfaces';
 import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useMobileNavStore } from '../navStore';
 import { Logger } from '../../utils/logger';
@@ -341,6 +342,8 @@ export function installMentionInbox(): () => void {
       if (!e.payload?.entry) return;
       Logger.debug('[Inbox] arrival', e.payload.entry.id);
       if (useMentionsStore.getState().sheetIn) return;
+      // Pinned on the surface in front: the pin says it, so no card does too.
+      if (arrivalPinnedOnScreen(e.payload.pin_surface, pinSurfaces.peek())) return;
       useMentionsStore.setState({
         arrival: { kind: 'mention', entry: e.payload.entry, avatar: e.payload.avatar ?? null, seq: ++seq },
       });
