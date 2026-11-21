@@ -4664,8 +4664,25 @@ html[data-motion="reduced"] .sub-progress-fill {
 .hype-train-level[data-density='4'] .hype-train-subs,
 .hype-train-level[data-density='4'] .hype-train-togo,
 .hype-train-level[data-density='4'] .hype-train-treasure,
-.hype-train-level[data-density='4'] .hype-train-name {
+.hype-train-level[data-density='4'] .hype-train-name-long,
+.hype-train-level[data-density='5'] .hype-train-subs,
+.hype-train-level[data-density='5'] .hype-train-togo,
+.hype-train-level[data-density='5'] .hype-train-treasure,
+.hype-train-level[data-density='5'] .hype-train-name,
+.hype-train-name-short {
   display: none;
+}
+/* The short type words ("Heist") stand in for the long ones at step 4. */
+.hype-train-level[data-density='4'] .hype-train-name-short {
+  display: inline;
+}
+/* The type words wear the type's color (Rust's accent), darker on a light
+   theme's pale glass so they keep their contrast. */
+.hype-train-type {
+  color: var(--hype-accent, var(--color-text-primary));
+}
+html[data-theme-tone='light'] .hype-train-type {
+  color: color-mix(in srgb, var(--hype-accent, var(--color-text-primary)) 62%, black);
 }
 
 /* The emote picker's source tabs, stepped down by fitHeaderDensity when the
@@ -4802,7 +4819,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   transition: clip-path 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .hype-train-card[data-themed] .hype-train-meter-glow {
-  background: var(--hype-fill);
+  background: var(--hype-fill-gradient);
 }
 
 /* Every few seconds one light runs the length of the fill (the first 28% of
@@ -4840,38 +4857,38 @@ html[data-motion="reduced"] .sub-progress-fill {
   transform: scaleX(-1);
   filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.7)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
 }
-/* A kind's own train (Rust's palette, `.hype-train-card[data-themed]`):
-   the card washed in its gradient, white words, its accent on the marks,
-   the timer, the level words and the comet, its fill on the track. */
-/* A tint over the glaze's material, not a cover: its frost and blur still
-   read through, and its rim and specular sit on top. Strong enough that the
-   white words hold on a light theme's floor too. */
+/* A type of train (Rust's palette, `.hype-train-card[data-themed]`): the card
+   stays the app's glaze in the theme's own ink; the type lives in the fill
+   (its flowing gradient, glow and sparks), in the label's type words and the
+   ring (its accent), and in a faint tint of the fill under the glass. */
 .hype-train-tint {
-  background: var(--hype-bg);
-  opacity: 0.72;
+  background: var(--hype-tint);
+  opacity: 0.12;
   border-radius: inherit;
   pointer-events: none;
-}
-/* A light theme's glaze floor is pale and would wash the kind out under
-   white words: the tint carries more of the card there. */
-html[data-theme-tone='light'] .hype-train-tint {
-  opacity: 0.9;
 }
 .hype-train-mark {
   color: var(--hype-accent, #ffc83d);
 }
-.hype-train-card[data-themed] .hype-train-need {
-  background: rgba(0, 0, 0, 0.22);
-  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.18);
-}
-.hype-train-card[data-themed] .hype-train-meter {
-  background: rgba(0, 0, 0, 0.28);
+/* The type's gradient rides the same flowing layer as the rainbow (the rule
+   above), so a heist's blue, pink and orange move the way the rainbow does. */
+.hype-train-progress-themed {
+  overflow: hidden;
 }
 .hype-train-progress-themed::before {
   content: '';
   position: absolute;
-  inset: 0;
-  background: var(--hype-fill);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 400%;
+  background-image: var(--hype-fill-gradient);
+  background-size: 50% 100%;
+  will-change: transform;
+  animation: hype-train-flow-x 15s linear infinite;
+}
+.hype-train-card[data-themed] .hype-train-sparks > i {
+  background: color-mix(in srgb, var(--hype-spark) 55%, white);
 }
 
 /* The comet's flash at the train's nose: a white core in a light halo,
@@ -5014,11 +5031,9 @@ html[data-theme-tone='light'] .hype-train-tint {
   background-clip: text;
   color: transparent;
 }
+/* A type's level-up words lead in its own gradient, as the fill. */
 .hype-train-card[data-themed] .hype-train-words-lead {
-  background-image: none;
-  -webkit-background-clip: border-box;
-  background-clip: border-box;
-  color: var(--hype-accent);
+  background-image: var(--hype-fill-gradient);
 }
 
 /* Heart break animation for unfavoriting */
@@ -5958,6 +5973,7 @@ html[data-sn-low-power] .hype-train-shimmer,
 html[data-sn-low-power] .hype-train-sparks > i,
 html[data-sn-low-power] .hype-train-progress-rainbow::before,
 html[data-sn-low-power] .hype-train-progress-golden::before,
+html[data-sn-low-power] .hype-train-progress-themed::before,
 html[data-motion="off"] .sn-aurora-1,
 html[data-motion="off"] .sn-aurora-2,
 html[data-motion="off"] .sn-atm-breathe-1,
@@ -5966,7 +5982,8 @@ html[data-motion="off"] .cologne-wash,
 html[data-motion="off"] .hype-train-shimmer,
 html[data-motion="off"] .hype-train-sparks > i,
 html[data-motion="off"] .hype-train-progress-rainbow::before,
-html[data-motion="off"] .hype-train-progress-golden::before {
+html[data-motion="off"] .hype-train-progress-golden::before,
+html[data-motion="off"] .hype-train-progress-themed::before {
   animation: none !important;
 }
 html[data-sn-low-power] .card-chip-shine > span,
@@ -7730,6 +7747,7 @@ html[data-engine="webkitgtk"] .hype-train-header,
 html[data-engine="webkitgtk"] .hype-train-progress-bar,
 html[data-engine="webkitgtk"] .hype-train-progress-golden::before,
 html[data-engine="webkitgtk"] .hype-train-progress-rainbow::before,
+html[data-engine="webkitgtk"] .hype-train-progress-themed::before,
 html[data-engine="webkitgtk"] .blue-drop-animation,
 html[data-engine="webkitgtk"] .green-drop-animation,
 html[data-engine="webkitgtk"] .rainbow-drop-animation,

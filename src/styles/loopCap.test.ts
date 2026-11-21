@@ -114,6 +114,10 @@ const CSS_ROWS: Record<string, Row> = {
     d: 'rest',
     cover: '.hype-train-progress-rainbow::before',
   },
+  'styles/globals.css|.hype-train-progress-themed::before': {
+    d: 'rest',
+    cover: '.hype-train-progress-themed::before',
+  },
   'styles/globals.css|.hype-train-progress-bar': { d: 'rests-ok' },
   'styles/globals.css|.hype-train-level-up': {
     d: 'instant-ok',

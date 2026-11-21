@@ -18,34 +18,32 @@ export function lookName(look: HypeTrainLookData | null | undefined): string {
   return look?.theme ?? look?.kind ?? 'regular';
 }
 
-/** Whether the bar names the train ("Heist", "Shared"): any train but a plain
- *  regular one, whose bar just says its level. */
+/** Whether the bar names the train ("Heist Train · Level 3"): any train but a
+ *  plain regular one, whose bar just says "Level 3". */
 export function namesTrain(look: HypeTrainLookData | null | undefined): boolean {
   return !!look && !!look.bar_name && (look.kind !== 'regular' || !!look.theme || look.shared);
 }
 
-/** The card's palette as CSS variables: the gradient, the accent and the fill,
- *  and white text, since every palette is a dark, saturated card. */
+/** The type's colors as CSS variables on the card (`[data-themed]`): the
+ *  fill's flowing gradient (and its glow and sparks), the accent for the type
+ *  words, the ring and the level-up words, and a faint tint of the fill under
+ *  the glass. The card itself stays the app's glaze, words in the theme's ink. */
 export function paletteStyle(palette: HypeTrainPalette | null): CSSProperties {
-  if (!palette) return {};
-  const stops = palette.background.length > 1 ? palette.background : [palette.background[0] ?? palette.accent, palette.background[0] ?? palette.accent];
+  if (!palette || palette.fill.length === 0) return {};
+  const stops = palette.fill.length > 1 ? palette.fill : [palette.fill[0], palette.fill[0]];
   return {
-    // The glaze's own rim and glow light in the kind's color, so the card
-    // stays the glaze, tinted, rather than a painted panel.
-    '--color-accent': palette.badge,
-    '--hype-bg': `linear-gradient(90deg, ${stops.join(', ')})`,
+    '--hype-fill-gradient': `linear-gradient(90deg, ${stops.join(', ')})`,
+    '--hype-tint': `linear-gradient(90deg, ${stops.join(', ')})`,
     '--hype-accent': palette.accent,
-    '--hype-fill': palette.fill,
-    '--color-text-primary': '#ffffff',
-    '--color-text-secondary': 'rgba(255, 255, 255, 0.82)',
+    '--hype-spark': palette.accent,
   } as CSSProperties;
 }
 
-/** The level-up confetti in the palette's colors: its gradient and its accent
- *  (a heist throws its three colors and gold). Empty keeps the rainbow. */
+/** The level-up confetti in the type's colors: its fill stops and its accent
+ *  (a heist throws its blue, pink and orange). Empty keeps the rainbow. */
 export function confettiColors(palette: HypeTrainPalette | null): string[] {
   if (!palette) return [];
-  return [...new Set([...palette.background, palette.accent, palette.fill].map((c) => c.toLowerCase()))];
+  return [...new Set([...palette.fill, palette.accent].map((c) => c.toLowerCase()))];
 }
 
 /** The stream-card chip: its color (the glaze's accent) and its word. */

@@ -12,18 +12,28 @@ const heist: HypeTrainLookData = {
   short_name: 'Heist',
   kickoff: 'The Heist Is On!',
   treasure_words: null,
-  bar_name: 'Heist',
+  bar_name: 'Heist Train',
+  bar_name_short: 'Heist',
   treasure_short: null,
   icon: null,
   trophy_icon: null,
-  palette: { background: ['#445ed6', '#fc52ae', '#ed815f'], accent: '#ffd24a', fill: '#ffffff', badge: '#fc52ae' },
+  palette: { fill: ['#445ed6', '#fc52ae', '#ed815f', '#fc52ae', '#445ed6'], accent: '#fc52ae', badge: '#fc52ae' },
   channel_color: null,
 };
-const plain: HypeTrainLookData = { ...heist, theme: null, name: 'Hype Train', short_name: '', bar_name: '', kickoff: null, palette: null };
+const plain: HypeTrainLookData = {
+  ...heist,
+  theme: null,
+  name: 'Hype Train',
+  short_name: '',
+  bar_name: '',
+  bar_name_short: '',
+  kickoff: null,
+  palette: null,
+};
 
 describe('hypeTrainLook', () => {
   it('reads the palette and the look name from Rust', () => {
-    expect(trainPalette({ look: heist })?.accent).toBe('#ffd24a');
+    expect(trainPalette({ look: heist })?.accent).toBe('#fc52ae');
     expect(trainPalette({ look: plain })).toBeNull();
     expect(trainPalette({})).toBeNull();
     expect(lookName(heist)).toBe('heist');
@@ -34,20 +44,21 @@ describe('hypeTrainLook', () => {
   it('names every train but a plain regular one', () => {
     expect(namesTrain(heist)).toBe(true);
     expect(namesTrain(plain)).toBe(false);
-    expect(namesTrain({ ...plain, shared: true, bar_name: 'Shared' })).toBe(true);
-    expect(namesTrain({ ...plain, kind: 'mythic', bar_name: 'Mythic' })).toBe(true);
+    expect(namesTrain({ ...plain, shared: true, bar_name: 'Shared Hype Train' })).toBe(true);
+    expect(namesTrain({ ...plain, kind: 'mythic', bar_name: 'Mythic Train' })).toBe(true);
   });
 
-  it('paints a palette as CSS variables with white text', () => {
+  it('puts the type in the fill and the accent, never over the card or its ink', () => {
     const style = paletteStyle(heist.palette) as Record<string, string>;
-    expect(style['--hype-bg']).toBe('linear-gradient(90deg, #445ed6, #fc52ae, #ed815f)');
-    expect(style['--hype-fill']).toBe('#ffffff');
-    expect(style['--color-text-primary']).toBe('#ffffff');
+    expect(style['--hype-fill-gradient']).toBe('linear-gradient(90deg, #445ed6, #fc52ae, #ed815f, #fc52ae, #445ed6)');
+    expect(style['--hype-accent']).toBe('#fc52ae');
+    // The card keeps the theme's own words: no ink override.
+    expect(style['--color-text-primary']).toBeUndefined();
     expect(paletteStyle(null)).toEqual({});
   });
 
   it('throws confetti in the palette, the rainbow without one', () => {
-    expect(confettiColors(heist.palette)).toEqual(['#445ed6', '#fc52ae', '#ed815f', '#ffd24a', '#ffffff']);
+    expect(confettiColors(heist.palette)).toEqual(['#445ed6', '#fc52ae', '#ed815f']);
     expect(confettiColors(null)).toEqual([]);
   });
 

@@ -32,14 +32,20 @@ pub struct Treasure {
     pub unlock_level: i32,
 }
 
-/// How a themed train is painted: `background` the card's gradient (left to
-/// right), `accent` the timer ring, level words and marks, `fill` the track,
-/// `badge` the stream card's chip (one color that says the kind at a glance).
+/// How a type of train is told apart at a glance (Brandon 2026-11-21: "design
+/// the colors of the progress and type in the Level so its obvious which train
+/// we're on, in a clean way"). The card stays the app's own glass; the type
+/// lives in the progress and the label:
+/// - `fill`: the track's gradient, one tile that flows like the regular
+///   rainbow (first and last stop the same, so the flow loops), also the
+///   fill's glow and sparks, and the card's faint tint;
+/// - `accent`: the type words in the label ("Heist Train"), the timer ring, the
+///   level-up words; clients darken it on light themes;
+/// - `badge`: the stream card's chip, one color.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Palette {
-    pub background: Vec<String>,
+    pub fill: Vec<String>,
     pub accent: String,
-    pub fill: String,
     pub badge: String,
 }
 
@@ -63,10 +69,13 @@ pub struct TrainLook {
     /// The treasure discount in words, Twitch's numbers: "-35% gifts from L5"
     /// (what is read out, and the desktop's tooltip).
     pub treasure_words: Option<String>,
-    /// The bar's own name for it, short so the amount still needed always
-    /// fits beside it: "Heist", "Shared Heist", "Golden Kappa", "Shared";
-    /// empty for a plain train (the bar just says its level).
+    /// The type words before "· Level n" in the bar: "Heist Train", "Golden
+    /// Kappa", "Treasure Train", "Shared Heist Train", "Shared Hype Train";
+    /// empty for a plain train (the bar says just "Level n").
     pub bar_name: String,
+    /// The same words shortened, for a tight row: "Heist", "Golden Kappa",
+    /// "Shared Heist".
+    pub bar_name_short: String,
     /// The bar's treasure chip, short: "-35% at L5".
     pub treasure_short: Option<String>,
     /// None: the app's own look (a regular train).
@@ -121,11 +130,10 @@ fn kind_of(f: &Facts) -> &'static str {
     }
 }
 
-fn palette(bg: &[&str], accent: &str, fill: &str, badge: &str) -> Option<Palette> {
+fn palette(fill: &[&str], accent: &str, badge: &str) -> Option<Palette> {
     Some(Palette {
-        background: bg.iter().map(|c| c.to_string()).collect(),
+        fill: fill.iter().map(|c| c.to_string()).collect(),
         accent: accent.to_string(),
-        fill: fill.to_string(),
         badge: badge.to_string(),
     })
 }
@@ -134,15 +142,28 @@ fn palette(bg: &[&str], accent: &str, fill: &str, badge: &str) -> Option<Palette
 pub fn train_look(f: &Facts) -> TrainLook {
     let kind = kind_of(f);
     let heist = kind == "regular" && f.now_ms < HEIST_THEME_UNTIL_MS && f.games.iter().any(|g| *g == GTA_VI_GAME_ID);
-    // Twitch's colors per kind (banner v3). Treasure and pinata are our own
-    // approximations of Twitch's named tokens.
+    // Each type's colors, after Twitch's own banners: heist's GTA blue, pink
+    // and orange; golden's gold; treasure's cyan to purple; mythic's bronze
+    // to gold; community's blue; pinata's party colors (ours).
     let (base, short, colors) = match (kind, heist) {
-        (_, true) => ("Heist Train", "Heist", palette(&["#445ed6", "#fc52ae", "#ed815f"], "#ffd24a", "#ffffff", "#fc52ae")),
-        ("golden_kappa", _) => ("Golden Kappa Train", "Golden", palette(&["#9a6a00", "#5c3d00"], "#ffd700", "#ff9a1f", "#ffc83d")),
-        ("treasure", _) => ("Treasure Train", "Treasure", palette(&["#0a6e8c", "#5c16c5"], "#ffc83d", "#ff4fd8", "#3fd0ff")),
-        ("mythic", _) => ("Mythic Train", "Mythic", palette(&["#4b3300", "#7f6b30", "#4b3300"], "#ffd760", "#ffd760", "#ffd760")),
-        ("community", _) => ("Community Train", "Community", palette(&["#1f69ff", "#0e3fa8"], "#9ec3ff", "#9ec3ff", "#6aa5ff")),
-        ("pinata", _) => ("Piñata Train", "Piñata", palette(&["#d9407a", "#f08a24", "#2fb3c4"], "#ffe066", "#ffffff", "#f08a24")),
+        (_, true) => ("Heist Train", "Heist", palette(&["#445ed6", "#fc52ae", "#ed815f", "#fc52ae", "#445ed6"], "#fc52ae", "#fc52ae")),
+        ("golden_kappa", _) => (
+            "Golden Kappa Train",
+            "Golden",
+            palette(&["#b8860b", "#ffd700", "#fff1b8", "#ffd700", "#b8860b"], "#f0b400", "#ffc83d"),
+        ),
+        ("treasure", _) => ("Treasure Train", "Treasure", palette(&["#22c7e6", "#7c3aed", "#22c7e6"], "#22b8dd", "#3fd0ff")),
+        ("mythic", _) => (
+            "Mythic Train",
+            "Mythic",
+            palette(&["#8c5a2b", "#d9a94a", "#ffd760", "#d9a94a", "#8c5a2b"], "#d9a94a", "#ffd760"),
+        ),
+        ("community", _) => ("Community Train", "Community", palette(&["#1f69ff", "#9ec3ff", "#1f69ff"], "#4d8dff", "#6aa5ff")),
+        ("pinata", _) => (
+            "Piñata Train",
+            "Piñata",
+            palette(&["#d9407a", "#f08a24", "#2fb3c4", "#f08a24", "#d9407a"], "#f08a24", "#f08a24"),
+        ),
         _ => ("Hype Train", "", None),
     };
     let name = if f.shared { format!("Shared {base}") } else { base.to_string() };
@@ -155,24 +176,34 @@ pub fn train_look(f: &Facts) -> TrainLook {
         .as_ref()
         .map(|t| format!("-{}% gifts from L{}", t.discount_percent, t.unlock_level));
     let treasure_short = treasure.as_ref().map(|t| format!("-{}% at L{}", t.discount_percent, t.unlock_level));
-    // The bar's short name: the kind's word ("Golden Kappa" keeps its whole
-    // name, "Golden" alone reads as a color), "Shared" before it.
-    let kind_word = match short {
-        "Golden" => "Golden Kappa",
+    // The bar's type words: the kind's name ("Golden Kappa" without "Train",
+    // which reads as one already), "Shared" before it; shortened to the
+    // kind's word for a tight row ("Golden Kappa" keeps both, "Golden" alone
+    // reads as a color).
+    let label = match base {
+        "Golden Kappa Train" => "Golden Kappa",
         other => other,
     };
+    let label_short = match short {
+        "Golden" => "Golden Kappa",
+        "" => "Hype",
+        other => other,
+    };
+    let (bar_name, bar_name_short) = match (f.shared, kind == "regular" && !heist) {
+        (false, true) => (String::new(), String::new()),
+        (true, true) => ("Shared Hype Train".to_string(), "Shared".to_string()),
+        (true, false) => (format!("Shared {label}"), format!("Shared {label_short}")),
+        (false, false) => (label.to_string(), label_short.to_string()),
+    };
+    // Twitch's own mark per type; a plain train keeps the app's train glyph.
     let icon = match (kind, heist) {
         (_, true) => Some(format!("{TWITCH_ASSETS}/heist-train-glitch.png")),
-        ("golden_kappa", _) => Some("https://static-cdn.jtvnw.net/emoticons/v2/80393/default/dark/2.0".to_string()),
+        ("golden_kappa", _) => Some("https://static-cdn.jtvnw.net/emoticons/v2/80393/default/dark/3.0".to_string()),
         ("treasure", _) => Some(format!("{TWITCH_ASSETS}/Hype_Train_Banner_Icon_Gold_Coin.png")),
         ("mythic", _) => Some(format!("{TWITCH_ASSETS}/mythic_train_icon.png")),
         ("community", _) => Some(format!("{TWITCH_ASSETS}/1a923a797768495fad684853aafd3bf281a60b7c.png")),
+        _ if f.shared => Some(format!("{TWITCH_ASSETS}/avatar-shared-hype-train-icon.svg")),
         _ => None,
-    };
-    let bar_name = match (f.shared, kind_word.is_empty()) {
-        (true, true) => "Shared".to_string(),
-        (true, false) => format!("Shared {kind_word}"),
-        (false, _) => kind_word.to_string(),
     };
     TrainLook {
         kind: kind.to_string(),
@@ -185,6 +216,7 @@ pub fn train_look(f: &Facts) -> TrainLook {
         kickoff: heist.then(|| "The Heist Is On!".to_string()),
         treasure_words,
         bar_name,
+        bar_name_short,
         treasure_short,
         palette: colors,
         icon,
@@ -246,7 +278,10 @@ mod tests {
         assert_eq!(look.kickoff.as_deref(), Some("The Heist Is On!"));
         assert!(look.icon.as_deref().is_some_and(|u| u.ends_with("/heist-train-glitch.png")));
         assert!(train_look(&facts(Some("REGULAR"))).icon.is_none(), "a plain train wears no mark");
-        assert_eq!(look.palette.as_ref().map(|p| p.background.len()), Some(3));
+        // The fill flows: its tile starts and ends on the same color.
+        let fill = look.palette.as_ref().map(|p| p.fill.clone()).unwrap_or_default();
+        assert_eq!((fill.first(), fill.last()), (Some(&"#445ed6".to_string()), Some(&"#445ed6".to_string())));
+        assert_eq!((look.bar_name.as_str(), look.bar_name_short.as_str()), ("Heist Train", "Heist"));
         // Another category, another kind, or after the event: no heist.
         assert!(train_look(&Facts { games: vec!["509658"], ..facts(Some("REGULAR")) }).theme.is_none());
         assert!(train_look(&Facts { games: vec![GTA_VI_GAME_ID], ..facts(Some("GOLDEN_KAPPA")) }).theme.is_none());
@@ -259,12 +294,16 @@ mod tests {
         let look = train_look(&Facts { shared: true, games: vec!["509658", GTA_VI_GAME_ID], ..facts(Some("REGULAR")) });
         assert_eq!(look.theme.as_deref(), Some("heist"));
         assert_eq!(look.name, "Shared Heist Train");
-        assert_eq!(look.bar_name, "Shared Heist");
+        assert_eq!((look.bar_name.as_str(), look.bar_name_short.as_str()), ("Shared Heist Train", "Shared Heist"));
         let shared_plain = train_look(&Facts { shared: true, ..facts(Some("REGULAR")) });
-        assert_eq!((shared_plain.name.as_str(), shared_plain.bar_name.as_str()), ("Shared Hype Train", "Shared"));
-        // The bar's short names, so the amount still needed always fits beside them.
-        assert_eq!(train_look(&facts(Some("GOLDEN_KAPPA"))).bar_name, "Golden Kappa");
-        assert_eq!(train_look(&facts(Some("REGULAR"))).bar_name, "");
+        assert_eq!((shared_plain.bar_name.as_str(), shared_plain.bar_name_short.as_str()), ("Shared Hype Train", "Shared"));
+        assert!(shared_plain.icon.as_deref().is_some_and(|u| u.ends_with("/avatar-shared-hype-train-icon.svg")));
+        // The type words: "Golden Kappa" without "Train"; a plain train has none.
+        let golden = train_look(&facts(Some("GOLDEN_KAPPA")));
+        assert_eq!((golden.bar_name.as_str(), golden.bar_name_short.as_str()), ("Golden Kappa", "Golden Kappa"));
+        assert!(golden.icon.as_deref().is_some_and(|u| u.ends_with("/80393/default/dark/3.0")));
+        let plain = train_look(&facts(Some("REGULAR")));
+        assert_eq!((plain.bar_name.as_str(), plain.icon.as_deref()), ("", None));
     }
 
     #[test]
@@ -273,7 +312,7 @@ mod tests {
         assert_eq!(look.treasure, Some(Treasure { discount_percent: 35, unlock_level: 5 }));
         assert_eq!(look.treasure_words.as_deref(), Some("-35% gifts from L5"));
         assert_eq!(look.treasure_short.as_deref(), Some("-35% at L5"));
-        assert_eq!(look.bar_name, "Treasure");
+        assert_eq!((look.bar_name.as_str(), look.bar_name_short.as_str()), ("Treasure Train", "Treasure"));
         // Details on another kind, or no discount, say nothing.
         assert!(train_look(&Facts { treasure_details: Some((35, 5)), ..facts(Some("REGULAR")) }).treasure.is_none());
         assert!(train_look(&Facts { treasure_details: Some((0, 5)), ..facts(Some("TREASURE")) }).treasure_words.is_none());

@@ -2299,14 +2299,14 @@ export interface HypeTrainBulkStatus {
   look?: HypeTrainLookData;
 }
 
-/** How a themed train is painted (Rust `hype_train_kind::Palette`). */
+/** How a type of train is told apart (Rust `hype_train_kind::Palette`): the
+ *  card stays the app's glass; the type lives in the progress and the label. */
 export interface HypeTrainPalette {
-  /** The card's gradient, left to right. */
-  background: string[];
-  /** The timer ring, the level words, the marks. */
+  /** The track's flowing gradient (one tile; first and last stop match),
+   *  also its glow, sparks and the card's faint tint. */
+  fill: string[];
+  /** The type words in the label, the timer ring, the level-up words. */
   accent: string;
-  /** The track's fill. */
-  fill: string;
   /** The stream card chip's one color. */
   badge: string;
 }
@@ -2330,9 +2330,11 @@ export interface HypeTrainLookData {
   kickoff: string | null;
   /** "-35% gifts from L5": read out, and the chip's tooltip. */
   treasure_words: string | null;
-  /** The bar's short name ("Heist", "Shared Heist", "Golden Kappa"), so the
-   *  amount still needed always fits beside it; empty for a plain train. */
+  /** The type words before "· Level n" ("Heist Train", "Golden Kappa",
+   *  "Shared Heist Train"); empty for a plain train. */
   bar_name: string;
+  /** The same words for a tight row ("Heist", "Shared Heist"). */
+  bar_name_short: string;
   /** The bar's treasure chip: "-35% at L5". */
   treasure_short: string | null;
   /** null: the app's own rainbow (a regular train). */

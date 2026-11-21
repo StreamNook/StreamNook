@@ -117,7 +117,7 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
   // The level side steps down in place while it overflows (CSS
   // `.hype-train-level[data-density]` says what each step drops).
   const [levelEl, setLevelEl] = useState<HTMLDivElement | null>(null);
-  useEffect(() => (levelEl ? fitHeaderDensity(levelEl, 4, 0) : undefined), [levelEl]);
+  useEffect(() => (levelEl ? fitHeaderDensity(levelEl, 5, 0) : undefined), [levelEl]);
   // The kind of train (Rust's look): its palette, name, marks and words.
   const trainLook = train.look ?? null;
   const palette = trainPalette(train);
@@ -273,32 +273,38 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
                 wordsUp ? 'opacity-0' : 'opacity-100'
               }`}
             >
-              {/* The train's short name, its level, what is still needed and
-                  a treasure train's discount. Too narrow for all of it, the
+              {/* The mark, the type and level, what is still needed and a
+                  treasure train's discount. Too narrow for all of it, the
                   subs go first, then the words "to go", then the discount,
-                  then the name. The level and the amount still needed (the
-                  bits) never go. */}
+                  then the type words shorten ("Heist"), then they go. The
+                  level and the amount still needed (the bits) never go. */}
               <div ref={setLevelEl} className="hype-train-level flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+                {/* The train's mark: Twitch's own art for the type (the heist
+                    glitch logo, the gold coin, the Golden Kappa), our train
+                    glyph for a plain train and while the art loads. An
+                    all-time high adds the trophy beside it. */}
+                <TrainMark icon={trainLook?.icon ?? null} themed={!!palette} />
                 {trainLook?.all_time_high &&
                   (trainLook.trophy_icon ? (
                     <KindMark url={trainLook.trophy_icon} label="All-time high" />
                   ) : (
                     <Trophy size={12} weight="fill" className="hype-train-mark shrink-0" aria-label="All-time high" />
                   ))}
-                {/* Twitch's own mark for the kind (the heist glitch logo, the
-                    gold coin, the Golden Kappa), before its name. */}
-                {named && trainLook?.icon && <KindMark url={trainLook.icon} className="hype-train-name" />}
-                {named && (
-                  <span
-                    className={`hype-train-name text-[12.5px] font-bold ${lead} text-textPrimary`}
-                    aria-label={trainLook?.name}
-                  >
-                    {trainLook?.bar_name}
+                {/* "Heist Train · Level 3": the type words in the type's
+                    color, the level in the text color; a plain train says
+                    just "Level 3". A tight row shortens the type words, then
+                    drops them; the level always stays. */}
+                <span className={`text-[12.5px] font-semibold ${lead} text-textPrimary`} aria-label={`${named ? `${trainLook?.name}, ` : ''}level ${displayedLevel || train.level}`}>
+                  {named && (
+                    <span aria-hidden>
+                      <span className="hype-train-type hype-train-name hype-train-name-long font-bold">{trainLook?.bar_name}</span>
+                      <span className="hype-train-type hype-train-name hype-train-name-short font-bold">{trainLook?.bar_name_short}</span>
+                      <span className="hype-train-name text-textSecondary"> · </span>
+                    </span>
+                  )}
+                  <span aria-hidden>
+                    Level <LevelNumber level={displayedLevel || train.level} instant={instant} rowH={rowH} />
                   </span>
-                )}
-                <span className={`text-[12.5px] font-semibold ${lead} text-textPrimary`}>
-                  {named ? 'Lv ' : 'Level '}
-                  <LevelNumber level={displayedLevel || train.level} instant={instant} rowH={rowH} />
                 </span>
                 {remaining > 0 ? (
                   // What the next level still needs, as marks: the bits gem and
@@ -369,49 +375,7 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
           {/* Compact, the row is the track's own 6 px and the percentage
               centers on it, overhanging the gaps above and below. */}
           <div className={`${compact ? 'h-1.5' : ''} mt-[7px] flex items-center gap-3`}>
-            <div className="relative h-1.5 min-w-0 flex-1">
-              {/* A soft glow under the fill, revealed with it. Its gradient is
-                  still (the blur is drawn once; only the clip moves). */}
-              <div
-                className="hype-train-meter-glow absolute inset-0 rounded-full"
-                // Overhang wide enough for the whole blur to fade out inside it,
-                // so the clip never shows as an edge; its rounded end stops
-                // under the train's body, never ahead of the train.
-                style={{ clipPath: `inset(-14px calc(${100 - shown}% + 8px) -14px -14px round 999px)` }}
-                aria-hidden
-              />
-              <div className="hype-train-meter absolute inset-0 overflow-hidden rounded-full">
-                <div
-                  className={`hype-train-meter-fill absolute inset-0 ${palette ? 'hype-train-progress-themed' : 'hype-train-progress-rainbow'}`}
-                  style={{ clipPath: `inset(0 ${100 - shown}% 0 0 round 999px)` }}
-                >
-                  {/* Now and then a light runs along the fill. */}
-                  <span className="hype-train-shimmer" aria-hidden />
-                </div>
-                {isLevelUpCelebration && <span key={celebrationId} className="hype-train-sheen" aria-hidden />}
-              </div>
-              {/* The train rides the fill's leading edge like a comet: a flash
-                  at its nose, a tapering trail and a few sparks behind it.
-                  All of it is carried by a full-width rail moved on a
-                  transform; the trail is no longer than the fill. */}
-              {shown > 0 && (
-                <div
-                  className="hype-train-tip-rail pointer-events-none absolute inset-0"
-                  style={{ transform: `translateX(${shown - 100}%)` }}
-                  aria-hidden
-                >
-                  <span className="hype-train-comet" style={{ maxWidth: `${shown}%` }} />
-                  <span className="hype-train-sparks" style={{ maxWidth: `${shown}%` }}>
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <span className="hype-train-flash" />
-                  <RiderTrain />
-                </div>
-              )}
-            </div>
+            <HypeTrack shown={shown} themed={!!palette} sheenId={isLevelUpCelebration ? celebrationId : null} />
             {/* Sized for "100%", so the track never shifts as it counts. */}
             <span className="w-[34px] shrink-0 text-right text-[11.5px] font-bold leading-none text-textPrimary tabular-nums">
               {shown}%
@@ -420,6 +384,58 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
         </div>
       </div>
     </>
+  );
+}
+
+/** The inset track: a recess with the fill revealed along it (its colors stay
+ *  put, so they say how far along it is), a soft glow under it, a light that
+ *  runs along it now and then, and the train riding its leading edge like a
+ *  comet. `sheenId` set: a level-up's one light sweeps the brimming track. */
+function HypeTrack({ shown, themed, sheenId }: { shown: number; themed: boolean; sheenId: number | null }) {
+  return (
+    <div className="relative h-1.5 min-w-0 flex-1">
+      {/* A soft glow under the fill, revealed with it. Its gradient is
+          still (the blur is drawn once; only the clip moves). */}
+      <div
+        className="hype-train-meter-glow absolute inset-0 rounded-full"
+        // Overhang wide enough for the whole blur to fade out inside it,
+        // so the clip never shows as an edge; its rounded end stops
+        // under the train's body, never ahead of the train.
+        style={{ clipPath: `inset(-14px calc(${100 - shown}% + 8px) -14px -14px round 999px)` }}
+        aria-hidden
+      />
+      <div className="hype-train-meter absolute inset-0 overflow-hidden rounded-full">
+        <div
+          className={`hype-train-meter-fill absolute inset-0 ${themed ? 'hype-train-progress-themed' : 'hype-train-progress-rainbow'}`}
+          style={{ clipPath: `inset(0 ${100 - shown}% 0 0 round 999px)` }}
+        >
+          {/* Now and then a light runs along the fill. */}
+          <span className="hype-train-shimmer" aria-hidden />
+        </div>
+        {sheenId !== null && <span key={sheenId} className="hype-train-sheen" aria-hidden />}
+      </div>
+      {/* The train rides the fill's leading edge like a comet: a flash at its
+          nose, a tapering trail and a few sparks behind it. All of it is
+          carried by a full-width rail moved on a transform; the trail is no
+          longer than the fill. */}
+      {shown > 0 && (
+        <div
+          className="hype-train-tip-rail pointer-events-none absolute inset-0"
+          style={{ transform: `translateX(${shown - 100}%)` }}
+          aria-hidden
+        >
+          <span className="hype-train-comet" style={{ maxWidth: `${shown}%` }} />
+          <span className="hype-train-sparks" style={{ maxWidth: `${shown}%` }}>
+            <i />
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="hype-train-flash" />
+          <RiderTrain />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -518,6 +534,42 @@ interface MarkArt {
   url: string | null;
   /** The ask has answered (with art or without). */
   settled: boolean;
+}
+
+/** The train's mark at the head of the label: Twitch's own art for the type
+ *  (Rust's look `icon`, from Twitch's CDN, never bundled), shown once it has
+ *  loaded; our train glyph for a plain train, while the art loads, and if it
+ *  fails. A 14 px slot either way, so nothing shifts when the art arrives. */
+function TrainMark({ icon, themed }: { icon: string | null; themed: boolean }) {
+  const [state, setState] = useState<{ url: string | null; loaded: boolean; failed: boolean }>({ url: icon, loaded: false, failed: false });
+  const current = state.url === icon ? state : { url: icon, loaded: false, failed: false };
+  const showArt = !!icon && current.loaded && !current.failed;
+  return (
+    <span className="hype-train-mark-slot relative flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden>
+      {!showArt && (
+        <svg className={`h-[11px] w-[13px] ${themed ? 'hype-train-type' : 'text-textSecondary'}`} viewBox="0 0 15 13" fill="none">
+          <path
+            fillRule="evenodd"
+            clipRule="evenodd"
+            d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z"
+            fill="currentColor"
+          />
+        </svg>
+      )}
+      {icon && !current.failed && (
+        <img
+          key={icon}
+          src={icon}
+          alt=""
+          className={`absolute inset-0 h-3.5 w-3.5 object-contain ${showArt ? '' : 'opacity-0'}`}
+          referrerPolicy="no-referrer"
+          draggable={false}
+          onLoad={() => setState({ url: icon, loaded: true, failed: false })}
+          onError={() => setState({ url: icon, loaded: false, failed: true })}
+        />
+      )}
+    </span>
+  );
 }
 
 /** A train kind's mark (Twitch's own art from its CDN, Rust's look). It keeps
