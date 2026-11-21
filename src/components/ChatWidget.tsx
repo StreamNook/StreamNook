@@ -71,6 +71,7 @@ import ManageChannelWindow from './chat/ManageChannelWindow';
 import { acceptsComposerEvent, managesHere, mustCloseSurfaces, type PaneEventDetail } from './chat/managerStore';
 import { useManagerInterest, useStreamManager, useTwitchAccount, type PageId } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
+import ConfettiBurst from './ConfettiBurst';
 import ViewersPanel from './ViewersPanel';
 import ModRoomPane from './modroom/ModRoomPane';
 import { EmotePickerPanel, useSwappingSmiley } from './chat/EmotePickerPanel';
@@ -1383,10 +1384,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const mountTimeRef = useRef<number>(Date.now());
   const [viewerCount, setViewerCount] = useState<number | null>(null);
   const streamUptimeRef = useRef<string>('');
-  // Hype train rendering (countdown, level-up, confetti) lives in HypeTrainBanner.
-  // We keep the chat container element so the banner can portal its level-up
-  // confetti to cover the full chat height.
+  // Hype train rendering (countdown, level-up) lives in HypeTrainBanner. Its
+  // level-up confetti is thrown here, over the whole chat column, so what lands
+  // on the composer's controls stays there (until hovered) after the bar's
+  // celebration, or the train itself, has ended. `burst` counts level-ups so
+  // each one throws another handful into the same canvas.
   const [chatContainerEl, setChatContainerEl] = useState<HTMLElement | null>(null);
+  const [hypeConfetti, setHypeConfetti] = useState<{ burst: number; golden: boolean } | null>(null);
+  const throwHypeConfetti = useCallback((golden: boolean) => {
+    setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden }));
+  }, []);
+  const hypeConfettiDone = useCallback(() => setHypeConfetti(null), []);
   // How tall the floating chat header currently is. It is absolutely positioned
   // OVER this column, and its height moves: a hype train, an expanded pinned
   // message. The combined-chat bar has to sit flush under it to read as one
@@ -4992,32 +5000,34 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           )}
         </ChatOverlayStack>
 
+        {/* Level-up confetti over the whole column; some lands on the
+            composer's controls and is brushed off when the pointer passes over one. */}
+        {hypeConfetti && (
+          <ConfettiBurst
+            burst={hypeConfetti.burst}
+            golden={hypeConfetti.golden}
+            perchOn=".sn-composer-row"
+            onDone={hypeConfettiDone}
+          />
+        )}
         {/* Chat header - transforms when Hype Train active */}
         {/* While the dock's tab row is unfolded the header rises above the pinned
             message (z-15) and the poll stack (z-40): the unfolded lines live
             inside the header's own stacking context and could not otherwise
             draw over them. */}
-        {/* flex-col-reverse keeps the stream-info row on top while the hype bar
-            (declared first below) renders underneath it */}
-        {/* The tint follows Glassiness: 10% of the rows show through at full
-            glass, none at 0%, where the blur is stripped too. */}
-        <div ref={setChromeEl} onWheel={forwardHeaderWheel} className={`absolute top-0 left-0 right-0 px-3 py-1.5 border-b backdrop-blur-ultra z-10 has-[.sn-tabs-unfolded]:z-[45] shadow-[0_8px_18px_-12px_rgba(0,0,0,0.7)] overflow-x-clip flex flex-col-reverse ${
-          isSharedChat && !currentHypeTrain ? 'iridescent-border' : 'border-borderSubtle'
-        }`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(100% - 10% * var(--glass-strength, 1)), transparent)' }}>
-          {currentHypeTrain && (
-            <HypeTrainBanner
-              train={currentHypeTrain}
-              confettiTarget={chatContainerEl}
-              onExpire={() => {
-                if (!channelOverride) useAppStore.getState().setCurrentHypeTrain(null);
-              }}
-            />
-          )}
-          {/* The dock's tab row, right under the stream-info row (the column is
-              reversed, so declared here it sits between that row and the hype
-              bar). The header is measured, so the chat below makes room for it. */}
-          {dockTabs && <ChatDockTabs />}
-          {/* Stream-info header, always visible; sits as the top row, above the hype bar */}
+        {/* The header area is measured as a whole (the chat below and the
+            overlays make room for all of it) but paints nothing itself: the
+            shelf (the stream-info row and the dock's tabs) wears the bar's
+            background, edge and shadow, and the hype train card floats under
+            it as its own glaze card, never sitting on that square shelf. The
+            gap around the card passes clicks through to the chat. */}
+        <div ref={setChromeEl} onWheel={forwardHeaderWheel} className="pointer-events-none absolute top-0 left-0 right-0 z-10 has-[.sn-tabs-unfolded]:z-[45] overflow-x-clip flex flex-col">
+          {/* The tint follows Glassiness: 10% of the rows show through at full
+              glass, none at 0%, where the blur is stripped too. */}
+          <div className={`pointer-events-auto px-3 py-1.5 border-b backdrop-blur-ultra shadow-[0_8px_18px_-12px_rgba(0,0,0,0.7)] ${
+            isSharedChat && !currentHypeTrain ? 'iridescent-border' : 'border-borderSubtle'
+          }`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(100% - 10% * var(--glass-strength, 1)), transparent)' }}>
+          {/* Stream-info header, always visible; the top row */}
           <div className="relative z-10">
               <div
                 ref={setHeaderRowEl}
@@ -5394,6 +5404,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               </div>
               {/* Pinned messages are now rendered in a floating modal outside the header */}
           </div>
+          {/* The dock's tab row, right under the stream-info row, on the shelf. */}
+          {dockTabs && <ChatDockTabs />}
+          </div>
+          {currentHypeTrain && (
+            <div className="px-2">
+              <HypeTrainBanner
+                train={currentHypeTrain}
+                floating
+                onLevelUp={throwHypeConfetti}
+                onExpire={() => {
+                  if (!channelOverride) useAppStore.getState().setCurrentHypeTrain(null);
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* A mention older than this chat's history, pinned above the

@@ -62,6 +62,7 @@ import { useMentionPins } from '../../hooks/useMentionPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { usePinsOpen } from '../watch/pinsOpen';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
+import ConfettiBurst from '../../components/ConfettiBurst';
 import PollOverlay from '../../components/PollOverlay';
 import PredictionOverlay from '../../components/PredictionOverlay';
 import { ChatOverlayStack } from '../../components/chat/ChatOverlayStack';
@@ -234,6 +235,14 @@ export const WatchScreen: React.FC = () => {
   const [largeChatHidden, setLargeChatHidden] = useState(false);
   const [watchLayout, setWatchLayout] = useState<WatchLayout>(readWatchLayout);
   const [chatSplit, setChatSplit] = useState<number | null>(readWatchSplit);
+  // The hype train's level-up confetti, thrown over the chat column as on
+  // desktop (ChatWidget): some lands on the composer's controls and stays
+  // until a finger brushes or taps it off. `burst` counts level-ups.
+  const [hypeConfetti, setHypeConfetti] = useState<{ burst: number; golden: boolean } | null>(null);
+  const throwHypeConfetti = useCallback((golden: boolean) => {
+    setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden }));
+  }, []);
+  const hypeConfettiDone = useCallback(() => setHypeConfetti(null), []);
   const [pip, setPip] = useState(false);
   // A pin opens or folds per channel: each channel starts as Chat > Pinned
   // Messages > Collapsed says, and a tap holds until the chat switches.
@@ -2257,6 +2266,17 @@ export const WatchScreen: React.FC = () => {
                     : undefined
           }
         >
+          {/* Level-up confetti over the whole chat column; some lands on the
+              composer's controls (`.sn-m-composer-row`). Only while the chat
+              shows the stream's own room, like the hype bar. */}
+          {hypeConfetti && !chatOverlay && streamScoped && (
+            <ConfettiBurst
+              burst={hypeConfetti.burst}
+              golden={hypeConfetti.golden}
+              perchOn=".sn-m-composer-row"
+              onDone={hypeConfettiDone}
+            />
+          )}
           {/* Chat header carries only live, transient signal now: the hype
               train and the pinned message. The persistent stream info lives in
               the player overlay, so chat keeps its full height. The poll,
@@ -2315,8 +2335,12 @@ export const WatchScreen: React.FC = () => {
                   tab you are reading. Showing it over another room's chat
                   credits it to the wrong channel. */}
               {!chatOverlay && streamScoped && currentHypeTrain && (
+                // Floats over the chat rows like the stack's other cards, so
+                // it wears the full glaze.
                 <HypeTrainBanner
                   train={currentHypeTrain}
+                  floating
+                  onLevelUp={throwHypeConfetti}
                   onExpire={() => useAppStore.getState().setCurrentHypeTrain(null)}
                 />
               )}

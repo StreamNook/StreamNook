@@ -2963,6 +2963,7 @@ pub fn run() {
             find_gif_link,
             // Bits: the insert menu's Bits section and a confirmed cheer
             get_bits_state,
+            bits_gem,
             check_cheer,
             send_cheer,
             ffz_local_user_status,

@@ -901,7 +901,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
         </div>
       )}
       {/* `relative` is the anchor both panels position against. */}
-      <div className="relative flex items-end gap-1.5 px-2.5 pt-2">
+      {/* sn-m-composer-row: the hype train's confetti lands on this row's
+          controls (WatchScreen's ConfettiBurst `perchOn`). */}
+      <div className="sn-m-composer-row relative flex items-end gap-1.5 px-2.5 pt-2">
         {/* Anchors the same way the panels do, and hides while either of them
             is open so two things never occupy that space at once. */}
         <AnimatePresence>

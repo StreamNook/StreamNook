@@ -420,7 +420,6 @@ describe('Backdrop filters stay out of combinations WebView2 mispaints', () => {
       'stats-hud': 'sits over the video, never nested in a heavy surface',
       'ghost-card': 'a placeholder tile in the Home grid',
       'update-pill': 'a tint inside the title bar',
-      'hype-train-track': 'sits over the chat, never nested in a heavy surface',
       'drops-preview-card-right': 'a floating preview card',
       'sn-chapter-tip': 'a timeline tooltip over the video',
       'sn-timeline__tip': 'a timeline tooltip over the video',

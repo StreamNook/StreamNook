@@ -712,6 +712,7 @@ allow = [
   "send_gif_message",
   "find_gif_link",
   "get_bits_state",
+  "bits_gem",
   "check_cheer",
   "send_cheer",
   "ffz_local_user_status",

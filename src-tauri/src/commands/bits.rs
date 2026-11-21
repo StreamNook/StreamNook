@@ -49,6 +49,17 @@ pub struct BitsState {
     pub icons: Vec<CheermoteAmount>,
 }
 
+/// Twitch's still Cheer gem for `amount` bits in `channel_login`'s cheer set:
+/// the gem Twitch draws for that many bits (grey, purple, green, blue, red by
+/// tier), as the wallet's own gem is. For marks like the hype train's "bits to
+/// go". None until the channel's cheermotes are known (chat fetches them on
+/// join). Memory only, no request.
+#[tauri::command]
+pub fn bits_gem(channel_login: String, amount: i64) -> Option<String> {
+    let key = channel_login.trim().trim_start_matches('#').to_ascii_lowercase();
+    bits::still_gem(&key, Some(amount))
+}
+
 /// The wallet's Bits tab for `channel_login` (bare login) / `channel_id`. One
 /// public settings lookup (cached) and the cached balance; the channel's
 /// cheermotes come from the set chat already holds, fetched here only if the
