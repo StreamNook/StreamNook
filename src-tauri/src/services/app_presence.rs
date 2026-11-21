@@ -60,6 +60,9 @@ pub fn set_foreground(foreground: bool) {
     // report (equal to the default) still arms the rules. The engine stores
     // the value synchronously and works on a spawned task.
     crate::services::account_automations::on_foreground(foreground);
+    // Pinned mentions (SN-284): both ways, and before the flush below, so a
+    // clock is stopped before the stores are written the last time.
+    crate::services::mention_pins::reading_inputs_changed();
     if !foreground {
         // The last reliable moment before either OS may end the process.
         crate::flush_debounced_stores();

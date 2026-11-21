@@ -99,4 +99,5 @@ pub mod vod_progress;
 pub mod watch_streak;
 pub mod whispers;
 pub mod mention_inbox;
+pub mod mention_pins;
 pub mod window_state;

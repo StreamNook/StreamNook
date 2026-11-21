@@ -58,7 +58,7 @@ use commands::{
     seventv_cosmetics_fetch::*, smiley_style::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     text_segments::*, twitch::*,
     universal_cache::*,
-    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whispers::*, mention_inbox::*, window_state::*,
+    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whispers::*, mention_inbox::*, mention_pins::*, window_state::*,
 };
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
@@ -1193,6 +1193,8 @@ pub fn run() {
             // platform: the old page's surfaces would keep Rust reading.
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 services::stream_manager::clear_label(webview.label());
+                // The old page's pinned-mention stacks are gone with it (SN-284).
+                services::mention_pins::window_page_started(webview.label());
             }
             // A reload drops the old page's open dialogs: its wrapper never got
             // to say they closed, so Performance mode would read the window as
@@ -2859,7 +2861,11 @@ pub fn run() {
             clear_mention_inbox,
             open_mention,
             get_mention_pins,
+            // v1's X, deprecated; v2 shells use dismiss_mention_pins.
             dismiss_mention_pin,
+            dismiss_mention_pins,
+            set_pin_surfaces,
+            note_viewer_input,
             set_visible_mention_rooms,
             mention_watch_pull,
             mention_push_arrived,
@@ -3252,6 +3258,7 @@ pub fn run() {
                 services::app_exit::note_window_destroyed(&label);
                 services::performance_mode::note_window_destroyed(&label);
                 services::whisper_claims::forget_window(&label);
+                services::mention_pins::forget_window(&label);
                 services::stream_manager::clear_label(&label);
                 // It stops hearing Activity and Notify claims.
                 services::account_automations::forget_window(&label);

@@ -86,6 +86,12 @@ fn target() -> Option<Target> {
     TARGET.lock().ok()?.clone()
 }
 
+/// The label of the window whose chat box the palette serves (pinned mentions
+/// credit the palette's input to it).
+pub(crate) fn served_window() -> Option<String> {
+    target().map(|t| t.window)
+}
+
 fn set_target(next: Option<Target>) -> Option<Target> {
     match TARGET.lock() {
         Ok(mut guard) => std::mem::replace(&mut *guard, next),

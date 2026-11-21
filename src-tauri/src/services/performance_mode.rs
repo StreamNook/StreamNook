@@ -26,6 +26,7 @@
 //! another app changes nothing; coming back turns it off at once.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicIsize, AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -215,12 +216,55 @@ pub fn sent() -> PerformanceState {
     *SENT.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// The last "StreamNook is in front" verdict, readable without a lock (SN-284:
+/// pinned mentions only count time while the app is in front). 0 = no verdict
+/// yet, 1 = not in front, 2 = in front.
+static IN_FRONT: AtomicU8 = AtomicU8::new(0);
+/// Windows: the foreground window the verdict was made for (0 = none).
+static FRONT_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Whether StreamNook is in front, as the last verdict said. None until the
+/// first verdict, and on Windows while no window is in the foreground.
+pub fn in_front() -> Option<bool> {
+    #[cfg(windows)]
+    if FRONT_HWND.load(Ordering::SeqCst) == 0 {
+        return None;
+    }
+    match IN_FRONT.load(Ordering::SeqCst) {
+        0 => None,
+        1 => Some(false),
+        _ => Some(true),
+    }
+}
+
+/// Windows: the foreground window's handle as the hook last saw it, 0 for none.
+pub fn front_hwnd() -> isize {
+    FRONT_HWND.load(Ordering::SeqCst)
+}
+
 fn apply(gen: u64, front: bool) {
-    let answer = inputs().answer(gen, front, Instant::now());
+    let (answer, verdict) = {
+        let mut i = inputs();
+        let answer = i.answer(gen, front, Instant::now());
+        (answer, i.in_front)
+    };
+    IN_FRONT.store(
+        match verdict {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        },
+        Ordering::SeqCst,
+    );
     if let Some(t0) = answer.arm {
         arm_timer(t0);
     }
     publish();
+    // Pinned mentions follow the same verdict. Called with no lock held (the
+    // sent guard and the inputs are both released), after the state went out.
+    if answer.changed {
+        crate::services::mention_pins::reading_inputs_changed();
+    }
 }
 
 fn arm_timer(t0: Instant) {
@@ -288,9 +332,11 @@ pub fn refresh(settings: &Settings) {
 /// Ask the OS whether StreamNook is in front. Only "In the background" needs
 /// it; called every second by the window poller. Never on the main thread.
 pub fn poll() {
+    // Also while Pin mentions is on: its clocks need the verdict too.
+    let pins = crate::services::mention_pins::pins_on();
     let gen = {
         let mut i = inputs();
-        if i.mode != PerformanceMode::Background {
+        if i.mode != PerformanceMode::Background && !pins {
             return;
         }
         i.bump()
@@ -517,7 +563,10 @@ fn ask(_app: &AppHandle, gen: u64) {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
     // SAFETY: no arguments; a null answer is handled by window_pid.
     let hwnd = unsafe { GetForegroundWindow() };
+    FRONT_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
     let Some(pid) = window_pid(hwnd) else {
+        // No foreground window at all: pinned mentions read that as away.
+        crate::services::mention_pins::reading_inputs_changed();
         return;
     };
     let key = (hwnd.0 as isize, pid);
@@ -548,6 +597,7 @@ unsafe extern "system" fn on_foreground(
     _thread: u32,
     _time: u32,
 ) {
+    FRONT_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
     let Some(pid) = window_pid(hwnd) else { return };
     let gen = inputs().bump();
     tauri::async_runtime::spawn_blocking(move || {

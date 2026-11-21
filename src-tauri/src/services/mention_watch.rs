@@ -202,6 +202,12 @@ impl RemoteMention {
             // Pulled from the server: said while away, so it never pins.
             pin_from_ms: None,
             pin_dismissed: false,
+            // R2: remote pinning (armed cursor, tracked gate) sets pin_from_ms
+            // after filing; the pin clock fields start empty.
+            pin_ended: false,
+            pin_left_ms: None,
+            pin_seen: false,
+            raw_color: (!self.color.is_empty()).then(|| self.color.clone()),
         })
     }
 }

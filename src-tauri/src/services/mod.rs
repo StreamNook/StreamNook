@@ -84,6 +84,8 @@ pub mod mention_ping;
 pub mod mention_watch;
 pub mod mention_match;
 pub mod mention_inbox;
+pub mod mention_pin_row;
+pub mod mention_pins;
 pub mod stream_manager;
 pub mod streamer_mode;
 pub mod suspicious_users;

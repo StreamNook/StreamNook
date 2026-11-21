@@ -234,7 +234,20 @@ pub fn set_app_interactive(interactive: bool) {
         s.set_interactive(interactive);
         s.newly_counting()
     };
-    after_change(new);
+    // The flag is set above, synchronously. Pinned mentions (SN-284) follow it
+    // with no lock held (they stop their clocks at once on `false`).
+    crate::services::mention_pins::note_interactive(interactive);
+    crate::services::mention_pins::reading_inputs_changed();
+    // The read-through takes the whisper store's lock and may touch disk, and
+    // this runs on the phones' main thread: it goes to the blocking pool.
+    if !new.is_empty() {
+        tauri::async_runtime::spawn_blocking(move || after_change(new));
+    }
+}
+
+/// Whether `label`'s window has OS focus, as `WindowEvent::Focused` last said.
+pub fn window_focused(label: &str) -> bool {
+    state().focused.get(label).copied().unwrap_or(false)
 }
 
 /// Whether someone is reading this conversation right now.

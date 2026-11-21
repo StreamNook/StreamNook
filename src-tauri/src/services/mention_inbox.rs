@@ -63,6 +63,12 @@ pub struct Arrival {
     /// The sender's picture when it is cached already; otherwise it is being
     /// looked up and lands as `channel-avatars`.
     pub avatar: Option<String>,
+    /// The surface the new pin was homed on when this entry pinned (SN-284):
+    /// a shell skips the card when that surface is the one on screen, since
+    /// the pin shows the mention already. None when it did not pin or no
+    /// surface was up to take it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin_surface: Option<String>,
 }
 
 /// A mention notification's words, the same on every app. The mention
@@ -171,75 +177,93 @@ pub struct MentionEntry {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub seen_live: bool,
     /// When this machine received it live (local clock, ms), which is what a
-    /// pinned mention's minutes count from (SN-284). None for anything filed
-    /// from history, a backlog or the mention server: those never pin.
+    /// pinned mention's clock and order start from (SN-284); for a mention
+    /// the server found it is the local time it was sent. None for anything
+    /// filed from history or a backlog: those never pin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_from_ms: Option<i64>,
     /// Its pin was dismissed (X, a click on it, or the mention opened
     /// anywhere), so it never pins again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pin_dismissed: bool,
+    /// Its pin ended (its minutes of use ran out, it was pushed out by a
+    /// newer one past Most at once, 24 h passed unseen, its chat was muted or
+    /// cleared). Final: nothing revives it, not a setting, not off and on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pin_ended: bool,
+    /// The use time its pin has left, once any of it was spent; absent means
+    /// the full time. A run's copies all carry the same value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_left_ms: Option<i64>,
+    /// The pin's clock has ever run (it was on screen while the viewer was
+    /// using StreamNook). Until-closed pins set it too, without a clock.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pin_seen: bool,
+    /// The sender's name color as chat sent it, before any readability pass,
+    /// so a pin draws the row's own color for the current theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_color: Option<String>,
 }
 
-/// One pinned mention (SN-284): the newest entry of a run of the same
-/// message, until when it stays, and how many copies the run holds.
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct MentionPin {
-    pub entry: MentionEntry,
-    pub until_ms: i64,
-    pub run: u32,
-}
-
-/// The most pins one answer carries: the newest is drawn, the rest open from
-/// its "+N".
-pub const MAX_PINS: usize = 10;
+/// The most pins at once and the default for the setting; the shells' own
+/// copy of the limits is the settings clamp (1 to 25).
+pub const DEFAULT_PINS_MAX: usize = 10;
 /// A live stamp this far ahead of the clock means the clock moved back:
-/// such an entry does not pin.
+/// such an entry does not pin (and does not end either).
 const PIN_FUTURE_SLACK_MS: i64 = 60_000;
-/// Emitted (no payload) when the pin minutes change, so every chat asks again.
-pub const PINS_EVENT: &str = "mention-pins-changed";
+/// An unseen pin ends after this long: a pin nobody looked at is not news.
+pub const PIN_UNSEEN_CAP_MS: i64 = 24 * 60 * 60 * 1000;
 
-/// The pins for chats showing `rooms` (Rust room keys, any case): mentions and
-/// replies received live within `window_ms` of `now_ms`, not removed, not
-/// dismissed, not in a muted chat; a run of the same message once (its
-/// newest); newest first; at most `MAX_PINS`. `entries` is oldest first.
-pub fn pins_from(
-    entries: &[MentionEntry],
-    rooms: &[String],
-    muted: &HashSet<String>,
-    now_ms: i64,
-    window_ms: i64,
-) -> Vec<MentionPin> {
-    if window_ms <= 0 || rooms.is_empty() {
-        return Vec::new();
+/// What the pin rule reads from the settings (SN-284).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinCfg {
+    pub on: bool,
+    /// How much use time a pin gets; None = until the viewer closes it.
+    pub expire_ms: Option<i64>,
+    pub max: usize,
+    /// When Pin mentions was last turned on; None = never stamped, nothing pins.
+    pub enabled_at_ms: Option<i64>,
+    /// Chats muted in Mentions settings: their pins end.
+    pub muted: HashSet<String>,
+}
+
+impl PinCfg {
+    pub fn off() -> Self {
+        Self { on: false, expire_ms: Some(60_000), max: DEFAULT_PINS_MAX, enabled_at_ms: None, muted: HashSet::new() }
     }
-    let rooms: HashSet<String> = rooms.iter().map(|r| r.to_lowercase()).collect();
-    let pinnable = |e: &MentionEntry| -> Option<i64> {
-        let from = e.pin_from_ms?;
-        let live = matches!(e.kind, MentionKind::Mention | MentionKind::Reply)
-            && !e.removed
-            && !e.pin_dismissed
-            && from > now_ms - window_ms
-            && from <= now_ms + PIN_FUTURE_SLACK_MS;
-        let room = e.room.to_lowercase();
-        (live && rooms.contains(&room) && !muted.contains(&room)).then_some(from)
-    };
-    // Newest by arrival here, not by the list's order: the list is kept in
-    // platform send time, and each platform keeps its own clock.
-    let mut live: Vec<(i64, &MentionEntry)> = entries.iter().filter_map(|e| pinnable(e).map(|from| (from, e))).collect();
-    live.sort_by_key(|(from, _)| std::cmp::Reverse(*from));
-    let mut out: Vec<MentionPin> = Vec::new();
-    for (from, e) in live {
-        if let Some(head) = out.iter_mut().find(|p| same_message(&p.entry, e)) {
-            head.run += 1;
-            continue;
-        }
-        if out.len() == MAX_PINS {
-            continue;
-        }
-        out.push(MentionPin { entry: e.clone(), until_ms: from + window_ms, run: 1 });
+
+    /// The clock a new pin starts with, or None for an until-closed pin.
+    fn full_left(&self) -> Option<i64> {
+        self.expire_ms
     }
-    out
+}
+
+/// One live pin: a run of copies of the same message, keyed by its oldest
+/// entry. The row, its order and its clock are the run's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinRun {
+    /// The oldest entry's id: the pin's id everywhere.
+    pub id: String,
+    /// Every copy's id, the head first.
+    pub ids: Vec<String>,
+    /// The head entry (what the answer's `entry` is).
+    pub entry: MentionEntry,
+    pub from_ms: i64,
+    /// The use time left, None for an until-closed pin.
+    pub left_ms: Option<i64>,
+    pub seen: bool,
+}
+
+/// What a clock step decided for one pin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinCredit {
+    pub id: String,
+    /// The pin counted this tick (it was on screen and the viewer was using
+    /// StreamNook).
+    pub counts: bool,
+    /// The use time to take off, already capped (a sleep never credits more
+    /// than two seconds).
+    pub credit_ms: i64,
 }
 
 /// One piece of a filed message.
@@ -309,6 +333,16 @@ struct InboxFile {
     /// `next` it answered (version 2).
     #[serde(default)]
     remote_cursor_ms: i64,
+    /// The first pull with Pin mentions on (local ms): a mention the server
+    /// found before it is backlog and never pins (SN-284).
+    #[serde(default)]
+    remote_pins_armed_ms: i64,
+    /// The pin snapshots, beside the entries and never on a wire: a pin's
+    /// filed message as raw JSON, decoded only when its row is built. A
+    /// snapshot that no longer decodes costs that pin its decoration, never
+    /// the inbox (the entries decode on their own).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pin_rows: HashMap<String, Box<serde_json::value::RawValue>>,
 }
 
 /// One owner's inbox in memory. Pure apart from the clock it is handed, so the
@@ -322,6 +356,9 @@ pub struct Inbox {
     /// Removed and cleared ids, oldest first, at most `MAX_TOMBSTONES`.
     tombstones: Vec<String>,
     remote_cursor_ms: i64,
+    remote_pins_armed_ms: i64,
+    /// See `InboxFile::pin_rows`.
+    pin_rows: HashMap<String, Box<serde_json::value::RawValue>>,
 }
 
 impl Inbox {
@@ -332,6 +369,8 @@ impl Inbox {
             visible: HashSet::new(),
             tombstones: Vec::new(),
             remote_cursor_ms: 0,
+            remote_pins_armed_ms: 0,
+            pin_rows: HashMap::new(),
         };
         inbox.prune(now_ms);
         inbox
@@ -341,6 +380,9 @@ impl Inbox {
         let mut inbox = Self::from_entries(file.entries, now_ms);
         inbox.tombstones = file.tombstones;
         inbox.remote_cursor_ms = file.remote_cursor_ms;
+        inbox.remote_pins_armed_ms = file.remote_pins_armed_ms;
+        inbox.pin_rows = file.pin_rows;
+        inbox.drop_orphan_pin_rows();
         inbox
     }
 
@@ -350,7 +392,25 @@ impl Inbox {
             entries: self.entries.clone(),
             tombstones: self.tombstones.clone(),
             remote_cursor_ms: self.remote_cursor_ms,
+            remote_pins_armed_ms: self.remote_pins_armed_ms,
+            pin_rows: self.pin_rows.clone(),
         }
+    }
+
+    /// Snapshots whose entry is gone (pruned, removed, cleared) or whose pin
+    /// is over (ended, dismissed) are dropped: a pin's snapshot lives only as
+    /// long as the pin can still show.
+    fn drop_orphan_pin_rows(&mut self) {
+        if self.pin_rows.is_empty() {
+            return;
+        }
+        let keep: HashSet<&str> = self
+            .entries
+            .iter()
+            .filter(|e| e.pin_from_ms.is_some() && !e.pin_ended && !e.pin_dismissed && !e.removed)
+            .map(|e| e.id.as_str())
+            .collect();
+        self.pin_rows.retain(|id, _| keep.contains(id.as_str()));
     }
 
     fn tombstone(&mut self, id: &str) {
@@ -400,10 +460,14 @@ impl Inbox {
     }
 
     fn prune(&mut self, now_ms: i64) {
+        let before = self.entries.len();
         self.entries.retain(|e| now_ms - e.at_ms <= MAX_AGE_MS);
         if self.entries.len() > MAX_ENTRIES {
             let extra = self.entries.len() - MAX_ENTRIES;
             self.entries.drain(..extra);
+        }
+        if self.entries.len() != before {
+            self.drop_orphan_pin_rows();
         }
     }
 
@@ -491,6 +555,9 @@ impl Inbox {
                 dismissed.push(e.id.clone());
             }
         }
+        for gone in &dismissed {
+            self.pin_rows.remove(gone);
+        }
         dismissed
     }
 
@@ -517,6 +584,7 @@ impl Inbox {
         let removed = self.entries.len() != before;
         if removed {
             self.tombstone(id);
+            self.pin_rows.remove(id);
         }
         removed
     }
@@ -525,6 +593,7 @@ impl Inbox {
         match self.entries.iter_mut().find(|e| e.id == id && !e.removed) {
             Some(e) => {
                 e.removed = true;
+                self.pin_rows.remove(id);
                 true
             }
             None => false,
@@ -537,6 +606,7 @@ impl Inbox {
         for id in ids {
             self.tombstone(&id);
         }
+        self.pin_rows.clear();
         had
     }
 
@@ -623,6 +693,235 @@ impl Inbox {
             .iter()
             .filter(|e| !e.read && !e.removed && filter.admits(e.kind))
             .count() as u32
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The pin rule (SN-284). Pure over the entries and the clock it is handed;
+// the 1 s tick, homes and surfaces live in `services::mention_pins`.
+// ---------------------------------------------------------------------------
+
+impl Inbox {
+    /// Every entry that may pin under `cfg`, oldest first by `(pin_from_ms, id)`,
+    /// grouped into runs of the same message keyed by the oldest copy. An ended
+    /// or dismissed run stays here (its copies join it, never starting a new
+    /// pin), but `pin_live_runs` leaves it out.
+    fn pin_candidates<'a>(&'a self, cfg: &PinCfg, now_ms: i64) -> Vec<Vec<&'a MentionEntry>> {
+        let Some(armed) = cfg.enabled_at_ms.filter(|_| cfg.on) else { return Vec::new() };
+        let mut list: Vec<&MentionEntry> = self
+            .entries
+            .iter()
+            .filter(|e| {
+                e.pin_from_ms.is_some_and(|from| from >= armed && from <= now_ms + PIN_FUTURE_SLACK_MS)
+                    && !e.removed
+                    && !cfg.muted.contains(&e.room.to_lowercase())
+            })
+            .collect();
+        list.sort_by(|a, b| (a.pin_from_ms, &a.id).cmp(&(b.pin_from_ms, &b.id)));
+        let mut runs: Vec<Vec<&MentionEntry>> = Vec::new();
+        for e in list {
+            match runs.iter_mut().find(|r| same_message(r[0], e)) {
+                Some(run) => run.push(e),
+                None => runs.push(vec![e]),
+            }
+        }
+        runs
+    }
+
+    /// The live pins at `now_ms`, oldest first: runs whose oldest copy has not
+    /// ended, been dismissed or been removed. An unseen pin past 24 h is not
+    /// live (the sweep ends it for good).
+    pub fn pin_live_runs(&self, cfg: &PinCfg, now_ms: i64) -> Vec<PinRun> {
+        self.pin_candidates(cfg, now_ms)
+            .into_iter()
+            .filter(|run| !run[0].pin_ended && !run[0].pin_dismissed)
+            .filter(|run| run[0].pin_seen || now_ms - run[0].pin_from_ms.unwrap_or(now_ms) < PIN_UNSEEN_CAP_MS)
+            .map(|run| {
+                let head = run[0];
+                PinRun {
+                    id: head.id.clone(),
+                    ids: run.iter().map(|e| e.id.clone()).collect(),
+                    entry: head.clone(),
+                    from_ms: head.pin_from_ms.unwrap_or(0),
+                    left_ms: cfg.expire_ms.map(|x| head.pin_left_ms.unwrap_or(x).min(x)),
+                    seen: head.pin_seen,
+                }
+            })
+            .collect()
+    }
+
+    /// Run `f` on every entry of the run `head_id` stands for.
+    fn pin_run_apply(&mut self, head_id: &str, f: impl Fn(&mut MentionEntry)) -> bool {
+        let Some(head) = self.entries.iter().find(|e| e.id == head_id).cloned() else { return false };
+        for e in self.entries.iter_mut() {
+            if e.id == head_id || (e.pin_from_ms.is_some() && same_message(&head, e)) {
+                f(e);
+            }
+        }
+        true
+    }
+
+    /// End a pin for good: every copy of its run.
+    pub fn pin_end_run(&mut self, head_id: &str) -> bool {
+        let ended = self.pin_run_apply(head_id, |e| e.pin_ended = true);
+        if ended {
+            self.drop_orphan_pin_rows();
+        }
+        ended
+    }
+
+    /// End what time and rules end: pins of muted chats, and unseen pins past
+    /// 24 h. Answers whether anything ended.
+    pub fn pin_sweep(&mut self, cfg: &PinCfg, now_ms: i64) -> bool {
+        let Some(armed) = cfg.enabled_at_ms.filter(|_| cfg.on) else { return false };
+        let mut changed = false;
+        for e in self.entries.iter_mut() {
+            let muted = cfg.muted.contains(&e.room.to_lowercase());
+            if muted && e.pin_from_ms.is_some_and(|f| f >= armed) && !e.pin_ended && !e.pin_dismissed && !e.removed {
+                e.pin_ended = true;
+                changed = true;
+            }
+        }
+        let stale: Vec<String> = self
+            .pin_candidates(cfg, now_ms)
+            .into_iter()
+            .filter(|run| {
+                !run[0].pin_ended
+                    && !run[0].pin_dismissed
+                    && !run[0].pin_seen
+                    && now_ms - run[0].pin_from_ms.unwrap_or(now_ms) >= PIN_UNSEEN_CAP_MS
+            })
+            .map(|run| run[0].id.clone())
+            .collect();
+        for id in stale {
+            changed |= self.pin_run_apply(&id, |e| e.pin_ended = true);
+        }
+        if changed {
+            self.drop_orphan_pin_rows();
+        }
+        changed
+    }
+
+    /// Most at once, applied when a row files and when the maximum is lowered:
+    /// the oldest by `(pin_from_ms, id)` past `cfg.max` end for good.
+    pub fn pin_enforce_max(&mut self, cfg: &PinCfg, now_ms: i64) -> bool {
+        let live = self.pin_live_runs(cfg, now_ms);
+        let excess = live.len().saturating_sub(cfg.max.max(1));
+        let mut changed = false;
+        for run in live.iter().take(excess) {
+            changed |= self.pin_run_apply(&run.id, |e| e.pin_ended = true);
+        }
+        if changed {
+            self.drop_orphan_pin_rows();
+        }
+        changed
+    }
+
+    /// One clock step's verdicts, applied to each run. A counting pin is
+    /// seen; a timed one loses its credit, and one with nothing left ends for
+    /// good. Answers whether anything changed and the pins that ended.
+    pub fn pin_apply_credits(&mut self, cfg: &PinCfg, credits: &[PinCredit]) -> (bool, Vec<String>) {
+        let mut changed = false;
+        let mut ended = Vec::new();
+        for c in credits.iter().filter(|c| c.counts) {
+            let Some(head) = self.entries.iter().find(|e| e.id == c.id) else { continue };
+            if head.pin_ended || head.pin_dismissed {
+                continue;
+            }
+            let was_seen = head.pin_seen;
+            let left = cfg.expire_ms.map(|x| head.pin_left_ms.unwrap_or(x).min(x) - c.credit_ms.max(0));
+            let before_left = head.pin_left_ms;
+            if left.is_some_and(|l| l <= 0) {
+                self.pin_run_apply(&c.id, |e| {
+                    e.pin_seen = true;
+                    e.pin_left_ms = Some(0);
+                    e.pin_ended = true;
+                });
+                ended.push(c.id.clone());
+                changed = true;
+                continue;
+            }
+            if !was_seen || (left.is_some() && left != before_left) {
+                self.pin_run_apply(&c.id, |e| {
+                    e.pin_seen = true;
+                    if let Some(l) = left {
+                        e.pin_left_ms = Some(l);
+                    }
+                });
+                changed = true;
+            }
+        }
+        if !ended.is_empty() {
+            self.drop_orphan_pin_rows();
+        }
+        (changed, ended)
+    }
+
+    /// `/clear` in a chat: its live pins end (the entries stay in the inbox).
+    pub fn pin_end_room(&mut self, room: &str) -> bool {
+        let room = room.to_lowercase();
+        let mut changed = false;
+        for e in self.entries.iter_mut() {
+            if e.pin_from_ms.is_some() && !e.pin_ended && e.room.to_lowercase() == room {
+                e.pin_ended = true;
+                changed = true;
+            }
+        }
+        if changed {
+            self.drop_orphan_pin_rows();
+        }
+        changed
+    }
+
+    /// A timeout or ban of one chatter: that sender's live pins in the chat
+    /// end, when they filed within the last 24 h. The inbox entries stay.
+    pub fn pin_end_sender(&mut self, room: &str, sender_id: &str, sender_login: &str, now_ms: i64) -> bool {
+        let room = room.to_lowercase();
+        let mut changed = false;
+        for e in self.entries.iter_mut() {
+            let same_sender = (!sender_id.is_empty() && e.sender_id == sender_id)
+                || (!sender_login.is_empty() && e.sender_login.eq_ignore_ascii_case(sender_login));
+            if e.pin_from_ms.is_some_and(|f| now_ms - f < PIN_UNSEEN_CAP_MS)
+                && !e.pin_ended
+                && same_sender
+                && e.room.to_lowercase() == room
+            {
+                e.pin_ended = true;
+                changed = true;
+            }
+        }
+        if changed {
+            self.drop_orphan_pin_rows();
+        }
+        changed
+    }
+
+    pub fn set_pin_row(&mut self, id: &str, raw: Box<serde_json::value::RawValue>) {
+        if self.entries.iter().any(|e| e.id == id) {
+            self.pin_rows.insert(id.to_string(), raw);
+        }
+    }
+
+    pub fn pin_row(&self, id: &str) -> Option<&serde_json::value::RawValue> {
+        self.pin_rows.get(id).map(|b| &**b)
+    }
+
+    pub fn has_pin_row(&self, id: &str) -> bool {
+        self.pin_rows.contains_key(id)
+    }
+
+    /// The first successful pull with Pin mentions on arms remote pins:
+    /// answers whether this set it.
+    pub fn arm_remote_pins(&mut self, now_ms: i64) -> bool {
+        if self.remote_pins_armed_ms != 0 {
+            return false;
+        }
+        self.remote_pins_armed_ms = now_ms;
+        true
+    }
+
+    pub fn remote_pins_armed_ms(&self) -> i64 {
+        self.remote_pins_armed_ms
     }
 }
 
@@ -991,6 +1290,10 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         seen_live: false,
         pin_from_ms: None,
         pin_dismissed: false,
+        pin_ended: false,
+        pin_left_ms: None,
+        pin_seen: false,
+        raw_color: msg.color.clone(),
     }
 }
 
@@ -1147,14 +1450,27 @@ struct Config {
     muted: HashSet<String>,
     /// Notifications on and "Mentions and replies" on.
     notify: bool,
-    /// How long a live mention stays pinned; 0 = Pin mentions off (SN-284).
-    pin_window_ms: i64,
+    /// Pin mentions (SN-284): on or off, the use time, the most at once and
+    /// the stamp. A separate switch, so "until closed" can never read as off.
+    pins: PinCfg,
+    /// The badge, theme and color settings that change what a pin's row
+    /// looks like: any change bumps the pins revision.
+    row_look: u64,
+}
+
+impl Default for PinCfg {
+    fn default() -> Self {
+        Self::off()
+    }
 }
 
 struct State {
     owner: String,
     inbox: Inbox,
     dirty: bool,
+    /// Only pin clock state changed (SN-284): saved on stop events, background
+    /// and exit (`flush_now`), never by the 5 s flusher and never per tick.
+    clock_dirty: bool,
     /// Other accounts' inbox keys already folded into this one since it loaded.
     merged: HashSet<String>,
 }
@@ -1170,10 +1486,17 @@ fn state() -> &'static Mutex<Option<State>> {
 
 fn config() -> Config {
     CONFIG
-        .get_or_init(|| RwLock::new(Config { highlight_words: true, muted: HashSet::new(), notify: false, pin_window_ms: 0 }))
+        .get_or_init(|| {
+            RwLock::new(Config { highlight_words: true, muted: HashSet::new(), notify: false, pins: PinCfg::off(), row_look: 0 })
+        })
         .read()
         .map(|c| c.clone())
         .unwrap_or_default()
+}
+
+/// The pin rule's settings as they stand.
+pub fn pin_cfg() -> PinCfg {
+    config().pins
 }
 
 fn unread_tx() -> &'static tokio::sync::watch::Sender<Arc<HashMap<String, u32>>> {
@@ -1186,40 +1509,62 @@ pub fn refresh(settings: &Settings) {
         highlight_words: settings.mentions.highlight_words,
         muted: settings.mentions.muted_channels.iter().map(|c| c.trim().to_lowercase()).collect(),
         notify: settings.live_notifications.enabled && settings.live_notifications.show_mention_notifications,
-        pin_window_ms: pin_window_ms(&settings.chat_design),
+        pins: pin_cfg_from(settings),
+        row_look: row_look_of(settings),
     };
-    let mut pins_changed = false;
+    let mut change = None;
     if let Ok(mut g) = CONFIG.get_or_init(|| RwLock::new(Config::default())).write() {
-        // The minutes, or (while pins are on) which chats are muted: muting a
-        // chat takes its pins away.
-        pins_changed = g.pin_window_ms != next.pin_window_ms || (next.pin_window_ms > 0 && g.muted != next.muted);
+        // What matters to pins: the switch, the use time, the maximum and the
+        // stamp, the muted chats (while pins are on: muting takes a chat's
+        // pins away), and the settings that change how a row looks.
+        let pins_differ = g.pins != next.pins;
+        let look_differs = g.row_look != next.row_look;
+        if pins_differ || look_differs {
+            change = Some((g.pins.clone(), next.pins.clone(), look_differs));
+        }
         *g = next;
     }
     // A settings save changes no inbox entry, so no inbox event would tell the
     // chats to ask again for their pins.
-    if pins_changed {
-        if let Some(app) = crate::services::providers::app_handle() {
-            let _ = app.emit(PINS_EVENT, ());
-        }
+    if let Some((old, new, look)) = change {
+        crate::services::mention_pins::config_changed(&old, &new, look);
     }
+}
+
+/// The pin rule's settings out of the saved settings (SN-284). The use time is
+/// 1 to 60 minutes or 0 for "until I close them"; the maximum 1 to 25.
+pub fn pin_cfg_from(settings: &Settings) -> PinCfg {
+    let d = &settings.chat_design;
+    PinCfg {
+        on: d.pin_mentions,
+        expire_ms: match d.pin_mentions_minutes {
+            0 => None,
+            m => Some(i64::from(m.clamp(1, 60)) * 60_000),
+        },
+        max: d.pin_mentions_max.clamp(1, 25) as usize,
+        enabled_at_ms: settings.pin_mentions_enabled_at_ms,
+        muted: settings.mentions.muted_channels.iter().map(|c| c.trim().to_lowercase()).collect(),
+    }
+}
+
+/// A fingerprint of the settings that change how a pin's row is drawn (badges,
+/// name colors, the theme): the chat design group and the theme. Coarse on
+/// purpose, since a spurious bump only makes shells ask again.
+fn row_look_of(settings: &Settings) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(&settings.chat_design).unwrap_or_default().hash(&mut h);
+    settings.theme.hash(&mut h);
+    h.finish()
 }
 
 /// A live filing's pin stamp (SN-284): now, on this machine's clock (never a
-/// platform's send time), while Pin mentions is on and the row is not a
-/// provider's backlog (YouTube's first page, rows refilling a reconnect gap).
-/// None otherwise, so turning pins on never pins what arrived while they were
-/// off, and opening such a mention changes nothing about pins.
-pub fn pin_stamp(from_backfill: bool, window_ms: i64, now_ms: i64) -> Option<i64> {
-    (window_ms > 0 && !from_backfill).then_some(now_ms)
-}
-
-/// How long a mention stays pinned (SN-284), in ms; 0 while Pin mentions is
-/// off. The minutes are kept within 1 to 60 whatever the file says.
-pub fn pin_window_ms(design: &crate::models::settings::ChatDesignSettings) -> i64 {
-    if !design.pin_mentions {
-        return 0;
-    }
-    i64::from(design.pin_mentions_minutes.clamp(1, 60)) * 60_000
+/// platform's send time), while Pin mentions is on and stamped, and the row is
+/// not a provider's backlog (YouTube's first page, rows refilling a reconnect
+/// gap). None otherwise, so turning pins on never pins what arrived while they
+/// were off, and opening such a mention changes nothing about pins.
+pub fn pin_stamp(from_backfill: bool, cfg: &PinCfg, now_ms: i64) -> Option<i64> {
+    (cfg.on && !from_backfill && cfg.enabled_at_ms.is_some_and(|armed| now_ms >= armed)).then_some(now_ms)
 }
 
 /// Whether a newly filed live entry is announced now. Pure apart from the
@@ -1292,7 +1637,7 @@ fn twitch_owner() -> Option<String> {
 /// screen carried over (they did not change with the account).
 fn next_state(old_visible: HashSet<String>, owner: String, mut inbox: Inbox) -> State {
     inbox.visible = old_visible;
-    State { owner, inbox, dirty: false, merged: HashSet::new() }
+    State { owner, inbox, dirty: false, clock_dirty: false, merged: HashSet::new() }
 }
 
 /// Which other accounts' inboxes still have to be folded into `owner`'s.
@@ -1312,8 +1657,17 @@ fn merge_sources(owner: &mut Inbox, sources: Vec<(String, Inbox)>, now_ms: i64) 
         for t in &source.tombstones {
             owner.tombstone(t);
         }
+        let mut rows = source.pin_rows;
         for e in source.entries {
-            owner.file(e, now_ms);
+            let id = e.id.clone();
+            let filed = owner.file(e, now_ms);
+            // A snapshot follows its entry into the new home (when that home
+            // has none for it yet).
+            if filed && !owner.pin_rows.contains_key(&id) {
+                if let Some(raw) = rows.remove(&id) {
+                    owner.set_pin_row(&id, raw);
+                }
+            }
         }
         held.push(key);
     }
@@ -1336,16 +1690,45 @@ fn with_twitch_inbox<R>(f: impl FnOnce(&mut Inbox) -> (R, bool)) -> Option<R> {
     with_inbox_of(owner, ChatRules::platform_owners(), f)
 }
 
+/// How much a step changed: nothing, only what is saved (the pin clocks tick
+/// every second and must not announce an inbox change each time), or the
+/// inbox itself (counts and the changed event).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Change {
+    None,
+    /// Pin clock time only: kept in memory and saved at the next stop event,
+    /// background or exit (`flush_now`), not by the periodic flusher.
+    Clock,
+    /// Something to save soon, announced to nobody (a pin ended).
+    Dirty,
+    Full,
+}
+
 /// `with_inbox` for a known owner, loading its inbox (and flushing the
 /// previous owner's) when the owner changed.
 fn with_inbox_of<R>(owner: String, sources: Vec<String>, f: impl FnOnce(&mut Inbox) -> (R, bool)) -> Option<R> {
-    let (out, dirty, counts) = {
+    with_inbox_level(owner, sources, |inbox| {
+        let (out, changed) = f(inbox);
+        (out, if changed { Change::Full } else { Change::None })
+    })
+}
+
+/// `with_inbox` for the pin clocks: the closure says how much it changed, and
+/// a `Dirty` step saves without announcing anything.
+pub(crate) fn with_pin_inbox<R>(f: impl FnOnce(&mut Inbox) -> (R, Change)) -> Option<R> {
+    let sources = ChatRules::platform_owners();
+    let owner = twitch_owner().or_else(|| sources.first().cloned())?;
+    with_inbox_level(owner, sources, f)
+}
+
+fn with_inbox_level<R>(owner: String, sources: Vec<String>, f: impl FnOnce(&mut Inbox) -> (R, Change)) -> Option<R> {
+    let (out, dirty, counts, fresh) = {
         let mut guard = state().lock().ok()?;
         let mut loaded = false;
         if guard.as_ref().map(|s| s.owner != owner).unwrap_or(true) {
             let mut visible = HashSet::new();
             if let Some(old) = guard.take() {
-                if old.dirty {
+                if old.dirty || old.clock_dirty {
                     let _ = write(&old.owner, &old.inbox.to_file());
                 }
                 visible = old.inbox.visible;
@@ -1377,18 +1760,26 @@ fn with_inbox_of<R>(owner: String, sources: Vec<String>, f: impl FnOnce(&mut Inb
             }
             st.merged.extend(pending);
         }
-        let (out, changed) = f(&mut st.inbox);
-        if changed {
-            st.dirty = true;
+        let (out, level) = f(&mut st.inbox);
+        let changed = level == Change::Full;
+        match level {
+            Change::None => {}
+            Change::Clock => st.clock_dirty = true,
+            Change::Dirty | Change::Full => st.dirty = true,
         }
         // A newly loaded account is announced like a change: its counts replace
         // the old account's, and a list read before the account was known
         // (empty) reads again.
         let counts = (changed || loaded || adopted).then(|| (st.inbox.unread_by_room(), st.inbox.unread_total()));
-        (out, st.dirty, counts)
+        (out, st.dirty, counts, loaded || adopted)
     };
     if dirty {
         ensure_flush_task();
+    }
+    if fresh {
+        // A newly loaded inbox may hold pins no surface heard of yet; the
+        // refresh runs on its own task, never inside this call.
+        crate::services::mention_pins::inbox_loaded();
     }
     if let Some((by_room, total)) = counts {
         unread_tx().send_replace(Arc::new(by_room));
@@ -1411,18 +1802,30 @@ fn ensure_flush_task() {
     tokio::spawn(async {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            let _ = tokio::task::spawn_blocking(flush_now).await;
+            // Clock-only changes wait for a stop event, background or exit.
+            let _ = tokio::task::spawn_blocking(|| flush(false)).await;
         }
     });
 }
 
 /// Write the inbox when it changed. Cheap when nothing did.
 pub fn flush_now() -> Result<(), String> {
+    // A running pin clock folds the time it has earned into its entries first
+    // (inbox, then pins), so what is written is never behind the clock. A no-op
+    // unless a pin clock is running.
+    crate::services::mention_pins::fold_for_flush();
+    flush(true)
+}
+
+/// Write what changed. `include_clock` also writes a change that is only pin
+/// clock time (the periodic flusher leaves those for the next stop event).
+fn flush(include_clock: bool) -> Result<(), String> {
     let snapshot = {
         let Ok(mut guard) = state().lock() else { return Ok(()) };
         match guard.as_mut() {
-            Some(st) if st.dirty => {
+            Some(st) if st.dirty || (include_clock && st.clock_dirty) => {
                 st.dirty = false;
+                st.clock_dirty = false;
                 let mut file = st.inbox.to_file();
                 file.entries = Inbox::from_entries(file.entries, now_ms()).entries;
                 Some((st.owner.clone(), file))
@@ -1455,17 +1858,34 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     let cfg = config();
     let Some(kind) = kind_for(verdict, cfg.highlight_words) else { return };
     let mut entry = entry_for(msg, kind, now_ms());
-    entry.pin_from_ms = pin_stamp(msg.metadata.from_backfill, cfg.pin_window_ms, now_ms());
+    entry.pin_from_ms = pin_stamp(msg.metadata.from_backfill, &cfg.pins, now_ms());
     if cfg.muted.contains(&entry.room) {
         return;
     }
+    // Only a pin candidate keeps a snapshot of the row (the chat hot path
+    // stays as it was for everything else).
+    let snapshot = entry.pin_from_ms.and_then(|_| crate::services::mention_pin_row::snapshot_of(msg));
+    let mut pin_surface = None;
     let visible = with_inbox(|inbox| {
         let visible = inbox.visible.contains(&entry.room);
         let filed = inbox.file(entry.clone(), now_ms());
         // Filed already from history or the server: it still pins (SN-284).
         let adopted = !filed && inbox.adopt_pin_stamp(&entry);
+        if filed || adopted {
+            if let Some(raw) = snapshot {
+                inbox.set_pin_row(&entry.id, raw);
+            }
+            if entry.pin_from_ms.is_some() {
+                // The oldest past Most at once end for good, now.
+                inbox.pin_enforce_max(&cfg.pins, now_ms());
+                pin_surface = crate::services::mention_pins::home_for_new_pin(&entry, &inbox.pin_live_runs(&cfg.pins, now_ms()));
+            }
+        }
         ((filed, visible), filed || adopted)
     });
+    if entry.pin_from_ms.is_some() {
+        crate::services::mention_pins::on_filed();
+    }
     // Already filed (a second pane, a replayed backlog): no second ping.
     let Some((true, visible)) = visible else { return };
     let gift = kind == MentionKind::Gift;
@@ -1486,7 +1906,7 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     if fresh {
         if let Some(app) = crate::services::providers::app_handle() {
             let avatar = avatar_of(&entry, &avatars_for(std::iter::once(&entry)));
-            let _ = app.emit(ARRIVED_EVENT, Arrival { entry: entry.clone(), avatar });
+            let _ = app.emit(ARRIVED_EVENT, Arrival { entry: entry.clone(), avatar, pin_surface });
         }
     }
     if !cfg.notify {
@@ -1535,7 +1955,15 @@ pub fn on_backfill(msg: &ChatMessage, verdict: &Verdict) {
 
 /// A moderator deleted a message: an inbox copy says so instead of quoting it.
 pub fn on_message_deleted(message_id: &str) {
-    let _ = with_inbox(|inbox| ((), inbox.mark_removed(message_id)));
+    let changed = with_inbox(|inbox| {
+        let changed = inbox.mark_removed(message_id);
+        (changed, changed)
+    })
+    .unwrap_or(false);
+    // A removed pin leaves the stack.
+    if changed {
+        crate::services::mention_pins::on_pins_ended();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1687,22 +2115,16 @@ pub fn caught_here(id: &str, room: &str) -> bool {
 
 /// Opening an entry marks it read, dismisses its pins, and returns it.
 pub fn open(id: &str) -> Option<MentionEntry> {
-    with_inbox(|inbox| match inbox.open_entry(id) {
+    let opened = with_inbox(|inbox| match inbox.open_entry(id) {
         Some((e, changed)) => (Some(e), changed),
         None => (None, false),
     })
-    .flatten()
-}
-
-/// The pinned mentions for chats showing `rooms` (SN-284). Empty while Pin
-/// mentions is off or nobody is signed in. Reading never changes the inbox.
-pub fn pins(rooms: &[String]) -> Vec<MentionPin> {
-    let cfg = config();
-    if cfg.pin_window_ms <= 0 {
-        return Vec::new();
+    .flatten();
+    if opened.is_some() {
+        // Opening dismissed its pin: every stack drops it.
+        crate::services::mention_pins::on_pins_ended();
     }
-    let now = now_ms();
-    with_inbox(|inbox| (pins_from(&inbox.entries, rooms, &cfg.muted, now, cfg.pin_window_ms), false)).unwrap_or_default()
+    opened
 }
 
 /// The X on a pin (SN-284): this message's pins go. True when anything
@@ -1714,6 +2136,69 @@ pub fn dismiss_pin(id: &str) -> bool {
         (changed, changed)
     })
     .unwrap_or(false)
+}
+
+/// Clear all (SN-284): every named pin goes, each with its copies. True when
+/// anything changed.
+pub fn dismiss_pins(ids: &[String]) -> bool {
+    with_inbox(|inbox| {
+        let mut changed = false;
+        for id in ids {
+            changed |= !inbox.dismiss_pin(id).is_empty();
+        }
+        (changed, changed)
+    })
+    .unwrap_or(false)
+}
+
+/// `/clear` in a chat: its live pins end for good; the entries stay.
+pub fn end_room_pins(room: &str) -> bool {
+    let changed = with_pin_inbox(|inbox| {
+        let changed = inbox.pin_end_room(room);
+        (changed, if changed { Change::Dirty } else { Change::None })
+    })
+    .unwrap_or(false);
+    if changed {
+        crate::services::mention_pins::on_pins_ended();
+    }
+    changed
+}
+
+/// A timeout or ban of one chatter: their live pins in the chat end for good.
+pub fn end_sender_pins(room: &str, sender_id: &str, sender_login: &str) -> bool {
+    let changed = with_pin_inbox(|inbox| {
+        let changed = inbox.pin_end_sender(room, sender_id, sender_login, now_ms());
+        (changed, if changed { Change::Dirty } else { Change::None })
+    })
+    .unwrap_or(false);
+    if changed {
+        crate::services::mention_pins::on_pins_ended();
+    }
+    changed
+}
+
+/// The mention server's first successful pull with Pin mentions on: remote
+/// rows pin only when they were sent at or after this. Answers the armed time
+/// (now when this call set it). None when no Twitch account is signed in.
+pub fn arm_remote_pins() -> Option<i64> {
+    with_pin_inbox(|inbox| {
+        let set = inbox.arm_remote_pins(now_ms());
+        (inbox.remote_pins_armed_ms(), if set { Change::Dirty } else { Change::None })
+    })
+}
+
+/// A snapshot for an entry's pin row (see `InboxFile::pin_rows`).
+pub fn store_pin_row(id: &str, raw: Box<serde_json::value::RawValue>) {
+    let _ = with_pin_inbox(|inbox| {
+        let had = inbox.has_pin_row(id);
+        inbox.set_pin_row(id, raw);
+        ((), if had { Change::None } else { Change::Dirty })
+    });
+}
+
+/// A copy of an entry's snapshot (the row builder decodes it off the lock).
+pub fn pin_row_of(id: &str) -> Option<Box<serde_json::value::RawValue>> {
+    with_pin_inbox(|inbox| (inbox.pin_row(id).map(|r| r.to_owned()), Change::None)).flatten()
 }
 
 #[cfg(test)]
@@ -1744,6 +2229,10 @@ mod tests {
             seen_live: false,
             pin_from_ms: None,
             pin_dismissed: false,
+            pin_ended: false,
+            pin_left_ms: None,
+            pin_seen: false,
+            raw_color: None,
         }
     }
 
@@ -1782,7 +2271,10 @@ mod tests {
 
     // ---- Pinned mentions (SN-284) ----------------------------------------
 
-    const WINDOW: i64 = 5 * 60_000;
+    /// Pin settings: on, 1 minute of use, at most 10, stamped well before `NOW`.
+    fn cfg() -> PinCfg {
+        PinCfg { on: true, expire_ms: Some(60_000), max: 10, enabled_at_ms: Some(NOW - 3_600_000), muted: HashSet::new() }
+    }
 
     /// A mention received live at `from` (local clock), sent by `sender`.
     fn live(id: &str, room: &str, sender: &str, text: &str, from: i64) -> MentionEntry {
@@ -1793,70 +2285,264 @@ mod tests {
         e
     }
 
-    fn rooms(list: &[&str]) -> Vec<String> {
-        list.iter().map(|r| r.to_string()).collect()
+    fn inbox_of(list: Vec<MentionEntry>) -> Inbox {
+        let mut inbox = Inbox::default();
+        for e in list {
+            inbox.file(e, NOW);
+        }
+        inbox
     }
 
-    fn ids(pins: &[MentionPin]) -> Vec<&str> {
-        pins.iter().map(|p| p.entry.id.as_str()).collect()
-    }
-
-    #[test]
-    fn a_pin_lasts_its_minutes_from_arrival_on_this_clock() {
-        let none = HashSet::new();
-        let inside = live("in", "xqc", "1", "@you one", NOW - WINDOW + 1);
-        let edge = live("edge", "xqc", "2", "@you two", NOW - WINDOW);
-        let pins = pins_from(&[edge, inside], &rooms(&["xqc"]), &none, NOW, WINDOW);
-        // The platform clock (an hour back) plays no part.
-        assert_eq!(ids(&pins), vec!["in"]);
-        assert_eq!(pins[0].until_ms, NOW + 1);
+    fn live_ids(inbox: &Inbox, cfg: &PinCfg, now: i64) -> Vec<String> {
+        inbox.pin_live_runs(cfg, now).into_iter().map(|r| r.id).collect()
     }
 
     #[test]
-    fn only_live_mentions_and_replies_in_the_rooms_shown_pin() {
-        let none = HashSet::new();
+    fn only_live_filed_kinds_pin_and_backlog_never_does() {
         let mut word = live("word", "xqc", "1", "nice phrase", NOW - 1000);
         word.kind = MentionKind::Word;
         let mut reply = live("reply", "XQC", "2", "@you sure", NOW - 2000);
         reply.kind = MentionKind::Reply;
+        let mut gift = live("gift", "xqc", "7", "Tier 1", NOW - 2500);
+        gift.kind = MentionKind::Gift;
         let mut history = entry("history", "xqc", NOW - 3000);
         history.sender_id = "3".into();
         let mut gone = live("gone", "xqc", "4", "@you deleted", NOW - 4000);
         gone.removed = true;
         let mut dismissed = live("dismissed", "xqc", "5", "@you seen", NOW - 5000);
         dismissed.pin_dismissed = true;
-        let elsewhere = live("elsewhere", "kick:other", "6", "@you", NOW - 6000);
-        let all = [elsewhere, dismissed, gone, history, reply, word];
-        assert_eq!(ids(&pins_from(&all, &rooms(&["xqc"]), &none, NOW, WINDOW)), vec!["reply"]);
+        let mut ended = live("ended", "xqc", "6", "@you late", NOW - 6000);
+        ended.pin_ended = true;
+        let inbox = inbox_of(vec![ended, dismissed, gone, history, gift, reply, word]);
+        // Oldest first, by arrival here.
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["gift", "reply", "word"]);
     }
 
     #[test]
-    fn a_muted_chat_and_a_bad_clock_pin_nothing() {
+    fn a_pin_needs_the_switch_the_stamp_and_a_live_clock() {
         let a = live("a", "xqc", "1", "@you", NOW - 1000);
+        let inbox = inbox_of(vec![a]);
+        let mut c = cfg();
+        c.on = false;
+        assert!(live_ids(&inbox, &c, NOW).is_empty(), "Pin mentions off");
+        let mut c = cfg();
+        c.enabled_at_ms = None;
+        assert!(live_ids(&inbox, &c, NOW).is_empty(), "a missing stamp pins nothing");
+        let mut c = cfg();
+        c.enabled_at_ms = Some(NOW - 500);
+        assert!(live_ids(&inbox, &c, NOW).is_empty(), "it arrived before the switch went on");
         let ahead = live("ahead", "xqc", "2", "@you later", NOW + PIN_FUTURE_SLACK_MS + 1);
-        let muted: HashSet<String> = ["xqc".to_string()].into();
-        assert!(pins_from(std::slice::from_ref(&a), &rooms(&["xqc"]), &muted, NOW, WINDOW).is_empty());
-        let none = HashSet::new();
-        assert_eq!(ids(&pins_from(&[a, ahead], &rooms(&["xqc"]), &none, NOW, WINDOW)), vec!["a"]);
-        assert!(pins_from(&[live("b", "xqc", "1", "@you", NOW)], &rooms(&["xqc"]), &none, NOW, 0).is_empty());
+        assert!(live_ids(&inbox_of(vec![ahead]), &cfg(), NOW).is_empty(), "a clock that moved back pins nothing");
     }
 
     #[test]
-    fn pins_come_newest_first_one_per_repeated_message_and_capped() {
-        let none = HashSet::new();
-        let mut all = vec![
+    fn a_stamp_only_goes_on_a_live_row_with_pins_on() {
+        assert_eq!(pin_stamp(false, &cfg(), NOW), Some(NOW));
+        assert_eq!(pin_stamp(true, &cfg(), NOW), None, "a provider's backlog never pins");
+        let mut off = cfg();
+        off.on = false;
+        assert_eq!(pin_stamp(false, &off, NOW), None);
+        let mut unstamped = cfg();
+        unstamped.enabled_at_ms = None;
+        assert_eq!(pin_stamp(false, &unstamped, NOW), None);
+    }
+
+    #[test]
+    fn copies_of_a_message_are_one_run_keyed_by_the_oldest_and_end_together() {
+        let all = vec![
             live("r1", "xqc", "9", "@you hi", NOW - 30_000),
             live("r2", "xqc", "9", "@YOU  hi", NOW - 20_000),
             live("other", "xqc", "8", "@you hey", NOW - 15_000),
             live("r3", "xqc", "9", "@you hi", NOW - 10_000),
         ];
-        let pins = pins_from(&all, &rooms(&["xqc"]), &none, NOW, WINDOW);
-        assert_eq!(ids(&pins), vec!["r3", "other"]);
-        assert_eq!((pins[0].run, pins[1].run), (3, 1));
-        all = (0..15).map(|i| live(&format!("m{i}"), "xqc", &i.to_string(), "@you", NOW - 60_000 + i)).collect();
-        let pins = pins_from(&all, &rooms(&["xqc"]), &none, NOW, WINDOW);
-        assert_eq!(pins.len(), MAX_PINS);
-        assert_eq!(pins[0].entry.id, "m14");
+        let mut inbox = inbox_of(all);
+        let runs = inbox.pin_live_runs(&cfg(), NOW);
+        assert_eq!(runs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["r1", "other"]);
+        assert_eq!(runs[0].ids, vec!["r1", "r2", "r3"]);
+        assert!(inbox.pin_end_run("r1"));
+        assert!(["r1", "r2", "r3"].iter().all(|id| inbox.get(id).is_some_and(|e| e.pin_ended)));
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["other"]);
+        // A fourth copy of an ended message joins the dead run: ended is final.
+        inbox.file(live("r4", "xqc", "9", "@you hi", NOW - 1_000), NOW);
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["other"]);
+    }
+
+    #[test]
+    fn most_at_once_ends_the_oldest_for_good_and_lowering_it_ends_the_excess() {
+        let all: Vec<MentionEntry> =
+            (0..12).map(|i| live(&format!("m{i:02}"), "xqc", &i.to_string(), "@you", NOW - 60_000 + i)).collect();
+        let mut inbox = inbox_of(all);
+        let c = cfg();
+        assert!(inbox.pin_enforce_max(&c, NOW));
+        let ids = live_ids(&inbox, &c, NOW);
+        assert_eq!(ids.len(), 10);
+        assert_eq!((ids[0].as_str(), ids[9].as_str()), ("m02", "m11"));
+        assert!(inbox.get("m00").is_some_and(|e| e.pin_ended), "pushed out for good");
+        // Raising the maximum again never brings them back.
+        let mut more = cfg();
+        more.max = 25;
+        assert!(!inbox.pin_enforce_max(&more, NOW));
+        assert_eq!(live_ids(&inbox, &more, NOW).len(), 10);
+        // Lowering it ends the excess at once.
+        let mut few = cfg();
+        few.max = 3;
+        assert!(inbox.pin_enforce_max(&few, NOW));
+        assert_eq!(live_ids(&inbox, &few, NOW), vec!["m09", "m10", "m11"]);
+    }
+
+    #[test]
+    fn the_clock_credits_only_what_counted_and_an_empty_one_ends_for_good() {
+        let mut inbox = inbox_of(vec![live("a", "xqc", "1", "@you", NOW - 1000), live("b", "xqc", "2", "@you hey", NOW - 900)]);
+        let c = cfg();
+        let credit = |id: &str, counts: bool, ms: i64| PinCredit { id: id.into(), counts, credit_ms: ms };
+        // Held: nothing changes.
+        assert_eq!(inbox.pin_apply_credits(&c, &[credit("a", false, 2_000)]), (false, vec![]));
+        assert!(inbox.get("a").is_some_and(|e| !e.pin_seen && e.pin_left_ms.is_none()));
+        // Counting: seen, and the credit comes off.
+        let (changed, ended) = inbox.pin_apply_credits(&c, &[credit("a", true, 2_000)]);
+        assert!(changed && ended.is_empty());
+        assert!(inbox.get("a").is_some_and(|e| e.pin_seen && e.pin_left_ms == Some(58_000)));
+        assert_eq!(inbox.pin_live_runs(&c, NOW)[0].left_ms, Some(58_000));
+        // The last of it ends the pin, final, with its snapshot dropped.
+        let (_, ended) = inbox.pin_apply_credits(&c, &[credit("a", true, 58_000)]);
+        assert_eq!(ended, vec!["a".to_string()]);
+        assert!(inbox.get("a").is_some_and(|e| e.pin_ended));
+        assert_eq!(live_ids(&inbox, &c, NOW), vec!["b"]);
+        // Changing For never revives it, whatever the new value.
+        let mut longer = cfg();
+        longer.expire_ms = Some(3_600_000);
+        assert_eq!(live_ids(&inbox, &longer, NOW), vec!["b"]);
+        let mut until_closed = cfg();
+        until_closed.expire_ms = None;
+        assert_eq!(live_ids(&inbox, &until_closed, NOW), vec!["b"]);
+    }
+
+    #[test]
+    fn an_until_closed_pin_has_no_clock_but_is_seen_and_skips_the_cap() {
+        let mut inbox = inbox_of(vec![live("a", "xqc", "1", "@you", NOW - 1000), live("b", "xqc", "2", "@you hey", NOW - 900)]);
+        let mut c = cfg();
+        c.expire_ms = None;
+        let (changed, ended) = inbox.pin_apply_credits(&c, &[PinCredit { id: "a".into(), counts: true, credit_ms: 2_000 }]);
+        assert!(changed && ended.is_empty());
+        assert!(inbox.get("a").is_some_and(|e| e.pin_seen && e.pin_left_ms.is_none()));
+        assert_eq!(inbox.pin_live_runs(&c, NOW)[0].left_ms, None);
+        // 25 hours on: the seen one stays, the unseen one is over.
+        let later = NOW + 25 * 3_600_000;
+        assert!(inbox.pin_sweep(&c, later));
+        assert_eq!(live_ids(&inbox, &c, later), vec!["a"]);
+        assert!(inbox.get("b").is_some_and(|e| e.pin_ended));
+    }
+
+    #[test]
+    fn an_unseen_pin_ends_after_24_hours_even_when_timed() {
+        let mut inbox = inbox_of(vec![live("a", "xqc", "1", "@you", NOW)]);
+        let c = cfg();
+        assert!(!inbox.pin_sweep(&c, NOW + PIN_UNSEEN_CAP_MS - 1));
+        assert!(inbox.pin_sweep(&c, NOW + PIN_UNSEEN_CAP_MS));
+        assert!(live_ids(&inbox, &c, NOW + PIN_UNSEEN_CAP_MS).is_empty());
+    }
+
+    #[test]
+    fn muting_a_chat_ends_its_pins_for_good() {
+        let mut inbox = inbox_of(vec![live("a", "xqc", "1", "@you", NOW - 1000), live("b", "other", "2", "@you", NOW - 900)]);
+        let mut c = cfg();
+        c.muted.insert("xqc".into());
+        assert!(inbox.pin_sweep(&c, NOW));
+        assert_eq!(live_ids(&inbox, &c, NOW), vec!["b"]);
+        // Unmuting does not bring it back.
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["b"]);
+    }
+
+    #[test]
+    fn a_clear_a_timeout_and_a_removal_end_pins_but_keep_the_entries() {
+        let mut inbox = inbox_of(vec![
+            live("a", "xqc", "1", "@you one", NOW - 3000),
+            live("b", "xqc", "2", "@you two", NOW - 2000),
+            live("c", "other", "3", "@you three", NOW - 1000),
+        ]);
+        assert!(inbox.pin_end_sender("xqc", "1", "", NOW));
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["b", "c"]);
+        assert!(inbox.pin_end_room("xqc"));
+        assert_eq!(live_ids(&inbox, &cfg(), NOW), vec!["c"]);
+        assert!(inbox.get("a").is_some() && inbox.get("b").is_some(), "the inbox keeps them");
+        assert!(inbox.mark_removed("c"));
+        assert!(live_ids(&inbox, &cfg(), NOW).is_empty());
+    }
+
+    #[test]
+    fn snapshots_live_beside_the_entries_and_leave_with_their_pin() {
+        let mut inbox = inbox_of(vec![live("a", "xqc", "1", "@you", NOW - 1000), live("b", "xqc", "2", "@hey", NOW - 900)]);
+        let raw = |s: &str| serde_json::value::RawValue::from_string(s.to_string()).unwrap();
+        inbox.set_pin_row("a", raw(r#"{"id":"a"}"#));
+        inbox.set_pin_row("b", raw(r#"{"id":"b"}"#));
+        inbox.set_pin_row("nobody", raw(r#"{}"#));
+        assert!(inbox.pin_row("nobody").is_none(), "no entry, no snapshot");
+        // It saves and loads with the file but never inside an entry.
+        let file = inbox.to_file();
+        let json = serde_json::to_string(&file).unwrap();
+        assert!(json.contains("\"pin_rows\""));
+        let wire = serde_json::to_string(&inbox.page(None, 10, false).0).unwrap();
+        assert!(!wire.contains("pin_rows") && !wire.contains(r#"{"id":"a"}"#));
+        let back = Inbox::from_file(serde_json::from_str(&json).unwrap(), NOW);
+        assert_eq!(back.pin_row("a").map(|r| r.get()), Some(r#"{"id":"a"}"#));
+        // Ending a pin drops its snapshot; so does dismissing, removing and pruning.
+        inbox.pin_end_run("a");
+        assert!(inbox.pin_row("a").is_none() && inbox.pin_row("b").is_some());
+        inbox.dismiss_pin("b");
+        assert!(inbox.pin_row("b").is_none());
+    }
+
+    #[test]
+    fn a_snapshot_that_will_not_decode_costs_the_row_never_the_inbox() {
+        let file: InboxFile = serde_json::from_str(
+            r#"{"version":2,"entries":[{"id":"a","platform":"twitch","room":"xqc","channel_login":"xqc","sender_id":"1",
+            "sender_login":"s","sender_name":"S","text":"hi","kind":"mention","at_ms":5,"read":false,"pin_from_ms":5}],
+            "pin_rows":{"a":{"anything":[1,2,{"x":null}]}}}"#,
+        )
+        .unwrap();
+        let inbox = Inbox::from_file(file, 6);
+        assert_eq!(inbox.entries.len(), 1);
+        assert!(inbox.pin_row("a").is_some(), "kept as raw JSON, decoded only when a row is built");
+    }
+
+    #[test]
+    fn a_file_from_before_the_pin_fields_loads_with_them_empty() {
+        let old: MentionEntry = serde_json::from_str(
+            r#"{"id":"a","platform":"twitch","room":"xqc","channel_login":"xqc","sender_id":"1","sender_login":"s",
+            "sender_name":"S","text":"hi","kind":"mention","at_ms":5,"read":false}"#,
+        )
+        .unwrap();
+        assert!(!old.pin_ended && !old.pin_seen && old.pin_left_ms.is_none() && old.raw_color.is_none());
+        let plain = serde_json::to_value(&old).unwrap();
+        for key in ["pin_ended", "pin_seen", "pin_left_ms", "raw_color", "pin_from_ms"] {
+            assert!(plain.get(key).is_none(), "{key} is left out until set");
+        }
+    }
+
+    #[test]
+    fn remote_pins_arm_once_and_persist() {
+        let mut inbox = Inbox::default();
+        assert!(inbox.arm_remote_pins(NOW));
+        assert!(!inbox.arm_remote_pins(NOW + 1));
+        let back = Inbox::from_file(serde_json::from_str(&serde_json::to_string(&inbox.to_file()).unwrap()).unwrap(), NOW);
+        assert_eq!(back.remote_pins_armed_ms(), NOW);
+    }
+
+    #[test]
+    fn the_settings_become_the_pin_rule() {
+        let mut s = crate::models::settings::Settings::default();
+        s.chat_design.pin_mentions = true;
+        s.pin_mentions_enabled_at_ms = Some(7);
+        let c = pin_cfg_from(&s);
+        assert_eq!((c.on, c.expire_ms, c.max, c.enabled_at_ms), (true, Some(60_000), 10, Some(7)));
+        s.chat_design.pin_mentions_minutes = 0;
+        assert_eq!(pin_cfg_from(&s).expire_ms, None, "0 = until I close them, never off");
+        s.chat_design.pin_mentions_minutes = 600;
+        s.chat_design.pin_mentions_max = 99;
+        let c = pin_cfg_from(&s);
+        assert_eq!((c.expire_ms, c.max), (Some(3_600_000), 25));
+        s.chat_design.pin_mentions_max = 0;
+        assert_eq!(pin_cfg_from(&s).max, 1);
     }
 
     #[test]
@@ -1921,49 +2607,14 @@ mod tests {
 
     #[test]
     fn newest_means_arrived_last_here_whatever_each_platform_clock_says() {
-        let none = HashSet::new();
         // Kick (local send time) arrived a minute ago; Twitch, whose clock is
         // three minutes behind this PC, arrived 5 s ago but sorts as older.
         let mut kick = live("kick", "kick:xqc", "1", "@you from kick", NOW - 60_000);
         kick.at_ms = NOW - 60_000;
         let mut twitch = live("twitch", "xqc", "2", "@you from twitch", NOW - 5_000);
         twitch.at_ms = NOW - 185_000;
-        let pins = pins_from(&[twitch, kick], &rooms(&["xqc", "kick:xqc"]), &none, NOW, WINDOW);
-        assert_eq!(ids(&pins), vec!["twitch", "kick"]);
-    }
-
-    #[test]
-    fn pin_fields_are_kept_and_left_out_when_unset() {
-        let plain = serde_json::to_value(entry("p", "xqc", NOW)).unwrap();
-        assert!(plain.get("pin_from_ms").is_none() && plain.get("pin_dismissed").is_none());
-        let mut e = live("q", "xqc", "1", "@you", NOW);
-        e.pin_dismissed = true;
-        let back: MentionEntry = serde_json::from_value(serde_json::to_value(&e).unwrap()).unwrap();
-        assert_eq!(back.pin_from_ms, Some(NOW));
-        assert!(back.pin_dismissed);
-        let old: MentionEntry = serde_json::from_value(plain).unwrap();
-        assert_eq!((old.pin_from_ms, old.pin_dismissed), (None, false));
-    }
-
-    #[test]
-    fn only_a_live_row_with_pins_on_gets_a_pin_stamp() {
-        assert_eq!(pin_stamp(false, WINDOW, NOW), Some(NOW));
-        assert_eq!(pin_stamp(true, WINDOW, NOW), None, "a provider's backlog never pins");
-        assert_eq!(pin_stamp(false, 0, NOW), None, "Pin mentions off: nothing is stamped");
-    }
-
-    #[test]
-    fn pin_minutes_follow_the_switch_and_stay_within_an_hour() {
-        let mut d = crate::models::settings::Settings::default().chat_design;
-        assert!(!d.pin_mentions);
-        assert_eq!(d.pin_mentions_minutes, 5);
-        assert_eq!(pin_window_ms(&d), 0);
-        d.pin_mentions = true;
-        assert_eq!(pin_window_ms(&d), 5 * 60_000);
-        d.pin_mentions_minutes = 0;
-        assert_eq!(pin_window_ms(&d), 60_000);
-        d.pin_mentions_minutes = 600;
-        assert_eq!(pin_window_ms(&d), 3_600_000);
+        // Oldest first by arrival here: the kick row, then the twitch row.
+        assert_eq!(live_ids(&inbox_of(vec![twitch, kick]), &cfg(), NOW), vec!["kick", "twitch"]);
     }
 
     /// One case of the wording the app and the mention server share.

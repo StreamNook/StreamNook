@@ -1,0 +1,124 @@
+{
+  "max": 10,
+  "pins": [
+    {
+      "channel_mark": null,
+      "clock": "running",
+      "day": false,
+      "entry": {
+        "at_ms": 1799999973000,
+        "channel_id": "1000",
+        "channel_login": "xqc",
+        "id": "a",
+        "kind": "mention",
+        "open_key": "xqc",
+        "pin_from_ms": 1799999980000,
+        "pin_left_ms": 59000,
+        "pin_seen": true,
+        "platform": "twitch",
+        "raw_color": "#ff0000",
+        "read": false,
+        "removed": false,
+        "reply_parent_id": null,
+        "room": "xqc",
+        "sender_color": "#ff0000",
+        "sender_id": "1",
+        "sender_login": "user1",
+        "sender_name": "User1",
+        "text": "hi @brandon a",
+        "watch_url": ""
+      },
+      "left_ms": 59000,
+      "rev": 0,
+      "row": {
+        "badges": [],
+        "channel": "xqc",
+        "color": "#ff0000",
+        "content": "hi @brandon a",
+        "display_name": "User1",
+        "id": "a",
+        "metadata": {},
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "hi @brandon a",
+            "type": "text"
+          }
+        ],
+        "tags": {
+          "display-name": "User1",
+          "id": "a",
+          "room-id": "1000",
+          "tmi-sent-ts": "1799999973000",
+          "user-id": "1"
+        },
+        "timestamp": "",
+        "user_id": "1",
+        "username": "user1"
+      },
+      "run": 1
+    },
+    {
+      "channel_mark": {
+        "channel": "otherchat",
+        "platform": "twitch",
+        "room": "otherchat"
+      },
+      "clock": "running",
+      "day": false,
+      "entry": {
+        "at_ms": 1799999983000,
+        "channel_id": "1000",
+        "channel_login": "otherchat",
+        "id": "b",
+        "kind": "mention",
+        "open_key": "otherchat",
+        "pin_from_ms": 1799999990000,
+        "pin_left_ms": 59000,
+        "pin_seen": true,
+        "platform": "twitch",
+        "raw_color": "#ff0000",
+        "read": false,
+        "removed": false,
+        "reply_parent_id": null,
+        "room": "otherchat",
+        "sender_color": "#ff0000",
+        "sender_id": "2",
+        "sender_login": "user2",
+        "sender_name": "User2",
+        "text": "hi @brandon b",
+        "watch_url": ""
+      },
+      "left_ms": 59000,
+      "rev": 0,
+      "row": {
+        "badges": [],
+        "channel": "otherchat",
+        "color": "#ff0000",
+        "content": "hi @brandon b",
+        "display_name": "User2",
+        "id": "b",
+        "metadata": {},
+        "provider": "twitch",
+        "segments": [
+          {
+            "content": "hi @brandon b",
+            "type": "text"
+          }
+        ],
+        "tags": {
+          "display-name": "User2",
+          "id": "b",
+          "room-id": "1000",
+          "tmi-sent-ts": "1799999983000",
+          "user-id": "2"
+        },
+        "timestamp": "",
+        "user_id": "2",
+        "username": "user2"
+      },
+      "run": 1
+    }
+  ],
+  "revision": 1
+}
