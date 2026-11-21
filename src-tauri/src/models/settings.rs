@@ -364,14 +364,20 @@ pub struct ChatDesignSettings {
     /// on screen, instead of only flashing as it lands.
     #[serde(default)]
     pub mention_hold: bool,
-    /// SN-284: a mention or reply to you received live stays pinned at the
-    /// top of its chat for `pin_mentions_minutes` (services::mention_inbox
-    /// decides the pins). Off by default.
+    /// SN-284: a mention, reply, highlight word or gift to you received live
+    /// stays pinned at the top of the chat you are reading for
+    /// `pin_mentions_minutes` of using StreamNook (services::mention_inbox and
+    /// services::mention_pins decide the pins). Off by default.
     #[serde(default)]
     pub pin_mentions: bool,
-    /// How long a pinned mention stays, in minutes (1 to 60; Rust clamps).
+    /// How long a pinned mention stays, in minutes of use: 1 to 60, or 0 for
+    /// "Until I close them" (a pin with no clock). Rust clamps anything else.
     #[serde(default = "default_pin_mentions_minutes")]
     pub pin_mentions_minutes: u32,
+    /// The most pins at once, 1 to 25; the oldest ends for good when a new one
+    /// would pass it. A field-level default would read 0, so it has its own fn.
+    #[serde(default = "default_pin_mentions_max")]
+    pub pin_mentions_max: u32,
     #[serde(default)]
     pub show_timestamps: bool, // Show timestamp next to each message
     #[serde(default)]
@@ -751,7 +757,10 @@ fn default_emote_margin() -> f64 {
     0.125
 }
 fn default_pin_mentions_minutes() -> u32 {
-    5
+    1
+}
+fn default_pin_mentions_max() -> u32 {
+    10
 }
 
 fn default_emote_hover_size() -> u32 {
@@ -808,6 +817,7 @@ impl Default for ChatDesignSettings {
             mention_hold: false,
             pin_mentions: false,
             pin_mentions_minutes: default_pin_mentions_minutes(),
+            pin_mentions_max: default_pin_mentions_max(),
             show_timestamps: false,
             show_timestamp_seconds: false,
             timestamp_format: default_timestamp_format(),
@@ -1355,6 +1365,15 @@ pub struct Settings {
     /// writes it, so a later choice of the old look is never flipped again.
     #[serde(default)]
     pub first_run_look_adopted: bool,
+    /// SN-284: when Pin mentions was last turned on (ms since the epoch). A
+    /// mention pins only if it arrived at or after this, so turning pins off
+    /// and on never brings back what ended. Rust-owned: only the settings
+    /// writers set it (`stamp_pin_mentions`), a window's save never carries it
+    /// back (`adopt_backend_owned`) and a backup never holds it
+    /// (`NON_PORTABLE_KEYS`). Absent means nothing pins until the switch is
+    /// turned on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_mentions_enabled_at_ms: Option<i64>,
     #[serde(default)]
     pub compact_view: Option<CompactViewSettings>,
     /// Whether diagnostic logging is enabled (defaults to true)
@@ -2018,6 +2037,7 @@ impl Default for Settings {
             setup_complete: false, // New users need to complete setup
             install_marked: false,
             first_run_look_adopted: true, // already starts with that look
+            pin_mentions_enabled_at_ms: None,
             compact_view: None,
             error_reporting_enabled: true, // Diagnostics enabled by default
             multi_nook_slots: Vec::new(),
@@ -2335,6 +2355,33 @@ impl Settings {
         // Rules, run state and away change only through the automations
         // commands: a window's stale copy never wipes or rewinds them.
         self.automations = authoritative.automations.clone();
+        // The Pin mentions stamp changes only in the settings writers
+        // (`stamp_pin_mentions`): a window's copy is stale at best.
+        self.pin_mentions_enabled_at_ms = authoritative.pin_mentions_enabled_at_ms;
+    }
+
+    /// The Pin mentions stamp (SN-284): set to `now_ms` when the saved switch
+    /// goes from off to on, comparing the settings held before (`prior`) with
+    /// these. Called inside the settings lock by every writer, so the stamp is
+    /// saved in the same write. Never from a boot load: a launch is not a
+    /// viewer turning pins on. Answers whether it stamped.
+    pub fn stamp_pin_mentions(&mut self, prior_on: bool, now_ms: i64) -> bool {
+        if self.chat_design.pin_mentions && !prior_on {
+            self.pin_mentions_enabled_at_ms = Some(now_ms);
+            return true;
+        }
+        false
+    }
+
+    /// The load fill: a file with Pin mentions on and no stamp (written
+    /// before the stamp existed, or rebuilt from a backup) is stamped with
+    /// now, once. Answers whether it filled.
+    pub fn fill_pin_mentions_stamp(&mut self, now_ms: i64) -> bool {
+        if self.chat_design.pin_mentions && self.pin_mentions_enabled_at_ms.is_none() {
+            self.pin_mentions_enabled_at_ms = Some(now_ms);
+            return true;
+        }
+        false
     }
 
     /// One-time move of an existing install onto the first-run chat look,
@@ -3032,6 +3079,56 @@ mod backup_persistence_tests {
         let mut incoming = Settings::default();
         incoming.adopt_backend_owned(&parsed);
         assert!(incoming.video_player.vertical_view);
+    }
+
+    #[test]
+    fn pin_mentions_settings_round_trip_with_until_closed_and_the_ten_default() {
+        let d = Settings::default().chat_design;
+        assert!(!d.pin_mentions);
+        assert_eq!((d.pin_mentions_minutes, d.pin_mentions_max), (1, 10));
+        // 0 = "Until I close them" survives a save and a load.
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value["chat_design"]["pin_mentions_minutes"] = serde_json::json!(0);
+        value["chat_design"]["pin_mentions_max"] = serde_json::json!(25);
+        let parsed: Settings = serde_json::from_value(value).expect("parse");
+        assert_eq!((parsed.chat_design.pin_mentions_minutes, parsed.chat_design.pin_mentions_max), (0, 25));
+        let saved = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(saved["chat_design"]["pin_mentions_minutes"], serde_json::json!(0));
+        assert_eq!(saved["chat_design"]["pin_mentions_max"], serde_json::json!(25));
+        // A file from before the maximum existed reads 10, never the serde 0.
+        let mut older = serde_json::to_value(Settings::default()).expect("serialize");
+        older["chat_design"].as_object_mut().unwrap().remove("pin_mentions_max");
+        older["chat_design"].as_object_mut().unwrap().remove("pin_mentions_minutes");
+        let older: Settings = serde_json::from_value(older).expect("an older file parses");
+        assert_eq!((older.chat_design.pin_mentions_minutes, older.chat_design.pin_mentions_max), (1, 10));
+    }
+
+    #[test]
+    fn the_pin_stamp_is_set_on_off_to_on_only_and_a_window_never_carries_it() {
+        let mut s = Settings::default();
+        assert!(s.pin_mentions_enabled_at_ms.is_none(), "never turned on: nothing pins");
+        assert!(!s.stamp_pin_mentions(false, 5), "still off");
+        s.chat_design.pin_mentions = true;
+        assert!(s.stamp_pin_mentions(false, 100), "off to on");
+        assert_eq!(s.pin_mentions_enabled_at_ms, Some(100));
+        assert!(!s.stamp_pin_mentions(true, 200), "on to on: unchanged");
+        assert_eq!(s.pin_mentions_enabled_at_ms, Some(100));
+        // The load fill: only an absent stamp, only with pins on.
+        let mut v1 = Settings::default();
+        v1.chat_design.pin_mentions = true;
+        assert!(v1.fill_pin_mentions_stamp(300));
+        assert!(!v1.fill_pin_mentions_stamp(400));
+        assert_eq!(v1.pin_mentions_enabled_at_ms, Some(300));
+        let mut off = Settings::default();
+        assert!(!off.fill_pin_mentions_stamp(300));
+        // It is saved, left out when absent, and a stale window copy never overwrites it.
+        let value = serde_json::to_value(&s).expect("serialize");
+        assert_eq!(value["pin_mentions_enabled_at_ms"], serde_json::json!(100));
+        assert!(serde_json::to_value(Settings::default()).unwrap().get("pin_mentions_enabled_at_ms").is_none());
+        let mut stale = Settings::default();
+        stale.pin_mentions_enabled_at_ms = Some(1);
+        stale.adopt_backend_owned(&s);
+        assert_eq!(stale.pin_mentions_enabled_at_ms, Some(100));
     }
 
     #[test]

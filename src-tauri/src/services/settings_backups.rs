@@ -139,6 +139,9 @@ pub fn recover(settings_path: &Path, error: &str) -> Option<Settings> {
         let Some(mut settings) = settings_from(&backup) else { continue };
         // A rebuilt file never brings rules back live or an old away.
         crate::commands::account_automations::pause_restored(&mut settings.automations);
+        // A rebuilt file with Pin mentions on is Pin mentions turned on now
+        // (SN-284): it holds no stamp, and without one nothing would pin.
+        settings.stamp_pin_mentions(false, chrono::Utc::now().timestamp_millis());
         let aside = settings_path.with_file_name(format!("settings.unreadable-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
         let _ = std::fs::copy(settings_path, &aside);
         log::warn!("[Settings] settings.json did not load ({error}); restored from {name}, the unreadable file is kept as {}", aside.display());

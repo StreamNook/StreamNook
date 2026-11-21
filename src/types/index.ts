@@ -249,11 +249,17 @@ export interface ChatDesignSettings {
   // Keep a mention or reply to you tinted the whole time it is on screen.
   // Typed in Rust (ChatDesignSettings), which owns the default: off.
   mention_hold?: boolean;
-  // SN-284: a mention or reply to you received live stays pinned at the top
-  // of its chat for pin_mentions_minutes (1-60, default 5). Off by default.
-  // Typed in Rust (ChatDesignSettings); Rust decides the pins.
+  // SN-284: a mention, reply, highlight word or gift to you received live
+  // stays pinned at the top of the chat you are reading for
+  // pin_mentions_minutes of using StreamNook. Off by default. Typed in Rust
+  // (ChatDesignSettings); Rust decides the pins.
   pin_mentions?: boolean;
+  // Minutes of use a pin stays: 1-60, default 1; 0 = "Until I close them"
+  // (a pin with no clock). Rust clamps anything else.
   pin_mentions_minutes?: number;
+  // Most pins at once: 1-25, default 10. The oldest ends for good when a new
+  // one would pass it.
+  pin_mentions_max?: number;
   show_timestamps?: boolean; // Show timestamp next to each message
   show_timestamp_seconds?: boolean; // Include seconds in timestamps
   timestamp_format?: '12h' | '24h'; // Formatted in Rust; default 12h
@@ -1814,6 +1820,7 @@ export interface Settings {
   error_reporting_enabled?: boolean; // Local diagnostic log verbosity; nothing is sent off-device (default: true)
   setup_complete?: boolean; // Whether the first-time setup wizard has been completed
   first_run_look_adopted?: boolean; // Backend-owned: set once the install moved onto the first-run chat look
+  pin_mentions_enabled_at_ms?: number; // Backend-owned (SN-284): when Pin mentions was last turned on; never sent from a window, never in a backup
   auto_claim_points_watching?: boolean; // Auto-claim the bonus chest on the channel you're actively watching. On by default; when off, a clickable chest appears on the points button. Scoped to the watched channel only (background automation is a separate opt-in plugin).
   compact_view?: CompactViewSettings; // Compact view preset settings
   custom_themes?: CustomTheme[]; // User-created custom themes

@@ -492,6 +492,14 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.retire_oled_v2();
     settings.adopt_multi_nook_start_volume_once();
     services::favorite_channels::repair(&mut settings);
+    // SN-284: a file with Pin mentions on and no stamp (written before the
+    // stamp existed) is stamped with now, once, and saved. A file that holds a
+    // stamp is left alone, so a launch never changes which pins may show.
+    if settings.fill_pin_mentions_stamp(chrono::Utc::now().timestamp_millis()) {
+        if let Err(e) = commands::settings::write_settings_to_disk_sync(&settings) {
+            log::warn!("[Settings] could not save the Pin mentions stamp: {e}");
+        }
+    }
     Ok(settings)
 }
 

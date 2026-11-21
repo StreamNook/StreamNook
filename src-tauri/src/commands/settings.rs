@@ -170,7 +170,9 @@ pub(crate) fn commit_settings_patch(
             log::warn!("[Settings] a save named the favorite lists; they change only through set_favorite_channel");
         }
         let sent_themes = patch.get("custom_themes").filter(|v| !v.is_null()).cloned();
-        let next = apply_settings_patch(&state_settings, patch)?;
+        let mut next = apply_settings_patch(&state_settings, patch)?;
+        // SN-284: Pin mentions turned on by this save is stamped in this write.
+        next.stamp_pin_mentions(state_settings.chat_design.pin_mentions, chrono::Utc::now().timestamp_millis());
         // Custom themes come back with their muted text lifted to the contrast
         // floor; when that changed what the window sent, it has to re-read too.
         let source = match sent_themes {
@@ -300,6 +302,8 @@ pub(crate) fn commit_settings(
         if !change(&mut copy)? {
             return Ok(false);
         }
+        // SN-284: the same stamp as every other writer.
+        copy.stamp_pin_mentions(state_settings.chat_design.pin_mentions, chrono::Utc::now().timestamp_millis());
         let written = copy.clone();
         *state_settings = copy;
         written
@@ -1030,6 +1034,8 @@ pub(crate) const NON_PORTABLE_KEYS: &[&str] = &[
     "current_account",
     "setup_complete",
     "last_seen_version",
+    // SN-284: when Pin mentions was last turned on, on this install.
+    "pin_mentions_enabled_at_ms",
 ];
 
 /// Absolute path of the folder that holds settings.json (alongside caches/logs).
@@ -1196,6 +1202,9 @@ pub(crate) fn apply_imported_settings(
         // or brings back an old away (reminders are untouched). Inside the
         // settings lock, so no save sees the unpaused copy.
         crate::commands::account_automations::pause_restored(&mut imported.automations);
+        // SN-284: a backup that brings Pin mentions on is stamped now, against
+        // the settings live in this lock (never against the earlier copy).
+        imported.stamp_pin_mentions(state_settings.chat_design.pin_mentions, chrono::Utc::now().timestamp_millis());
         *state_settings = imported.clone();
     }
     // The backup's recent polls and predictions go in front of the ones kept
@@ -1709,6 +1718,62 @@ mod patch_tests {
         let portable = &backups[backups.find("pub fn portable(").unwrap()..];
         let portable = &portable[..portable.find("\n}\n").unwrap()];
         assert!(portable.find("seed_poll_recents(&settings.extra)").unwrap() < portable.find("with_poll_recents(").unwrap());
+    }
+
+    /// SN-284: the Pin mentions stamp is set by all four writers, inside the
+    /// settings lock, against the settings held before (never from a boot load).
+    #[test]
+    fn every_settings_writer_stamps_pin_mentions_inside_its_lock() {
+        let src = this_file();
+        let body = |start: &str| {
+            let from = &src[src.find(start).unwrap_or_else(|| panic!("{start} exists"))..];
+            from[..from.find("\n}\n").unwrap()].to_string()
+        };
+        let patch = body("pub(crate) fn commit_settings_patch(");
+        assert!(patch.find("state.settings.lock()").unwrap() < patch.find("next.stamp_pin_mentions(").unwrap());
+        assert!(patch.find("next.stamp_pin_mentions(").unwrap() < patch.find("*state_settings = next.clone()").unwrap());
+        assert!(patch.contains("state_settings.chat_design.pin_mentions,"), "compared with the prior in-memory settings");
+        let commit = body("pub(crate) fn commit_settings(");
+        assert!(commit.find("copy.stamp_pin_mentions(").unwrap() < commit.find("*state_settings = copy").unwrap());
+        let import = body("pub(crate) fn apply_imported_settings(");
+        let second_lock = import.rfind("state.settings.lock()").unwrap();
+        let stamp = import.find("imported.stamp_pin_mentions(").unwrap();
+        assert!(second_lock < stamp && stamp < import.find("*state_settings = imported.clone()").unwrap());
+        assert!(import[stamp..stamp + 120].contains("state_settings.chat_design.pin_mentions"), "against the live settings, not the earlier copy");
+        let recover = include_str!("../services/settings_backups.rs").replace("\r\n", "\n");
+        let recover = &recover[recover.find("pub fn recover(").unwrap()..];
+        assert!(recover[..recover.find("\n}\n").unwrap()].contains("settings.stamp_pin_mentions(false,"));
+        // The load fill runs once the file is read, saves, and never runs from apply_loaded_settings.
+        let lib = include_str!("../lib.rs").replace("\r\n", "\n");
+        let load = &lib[lib.find("fn load_settings_from_file(").unwrap()..];
+        assert!(load[..load.find("\n}\n").unwrap()].contains("settings.fill_pin_mentions_stamp("));
+        let boot = &lib[lib.find("fn apply_loaded_settings(").unwrap()..];
+        assert!(!boot[..boot.find("\n}\n").unwrap()].contains("stamp"));
+        assert!(NON_PORTABLE_KEYS.contains(&"pin_mentions_enabled_at_ms"));
+    }
+
+    #[test]
+    fn the_stamp_survives_the_patch_a_window_saves_and_never_reaches_a_backup() {
+        // A window's save names chat_design (pins on) but never the stamp: the
+        // writer's helper stamps it, and the stale window copy cannot undo it.
+        let mut current = Settings::default();
+        current.pin_mentions_enabled_at_ms = Some(77);
+        let mut patch = serde_json::Map::new();
+        patch.insert("pin_mentions_enabled_at_ms".into(), serde_json::json!(1));
+        let next = apply_settings_patch(&current, patch).unwrap();
+        assert_eq!(next.pin_mentions_enabled_at_ms, Some(77), "a patch never writes the stamp");
+        // Off to on in a patch: stamped by the writer.
+        let mut patch = serde_json::Map::new();
+        patch.insert("chat_design".into(), {
+            let mut d = serde_json::to_value(&current.chat_design).unwrap();
+            d["pin_mentions"] = serde_json::json!(true);
+            d
+        });
+        let mut next = apply_settings_patch(&current, patch).unwrap();
+        assert!(next.stamp_pin_mentions(current.chat_design.pin_mentions, 500));
+        assert_eq!(next.pin_mentions_enabled_at_ms, Some(500));
+        let backup = crate::services::settings_backups::portable(&next).unwrap();
+        assert!(backup.get("pin_mentions_enabled_at_ms").is_none(), "a backup never holds it");
     }
 
     #[test]
