@@ -238,7 +238,14 @@ export function MobileEvolution() {
           <span className="missing-now-title">Evolution</span>
           <p className="h-[17px]" />
         </header>
-        <div className="h-[52px] rounded-xl glass-panel animate-pulse" />
+        {/* As many bars as lines fitted last time (about 59 px of header
+            and padding, a line every 58), so the held room reads as lines
+            coming, not a blank band (the iPhone draws it the same way). */}
+        <div className="flex flex-col gap-1.5 animate-pulse">
+          {Array.from({ length: Math.max(1, Math.floor((placeholderPx - 59 + 6) / 58)) }, (_, i) => (
+            <div key={i} className="h-[52px] rounded-xl glass-panel" />
+          ))}
+        </div>
       </section>
     ) : null;
   }
