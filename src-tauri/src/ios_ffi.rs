@@ -173,11 +173,16 @@ pub fn badge_fold_plan(badges: Vec<BadgeFoldInput>, limit: Option<f64>) -> Badge
     }
 }
 
-/// The app's lifecycle as the shell sees it: `foreground`, `background`,
-/// `terminating` or `memory_warning`.
+/// The app's lifecycle as the shell sees it: `active`, `inactive`, `foreground`,
+/// `background`, `terminating` or `memory_warning`.
 #[uniffi::export]
 pub fn lifecycle(state: String) {
     match state.as_str() {
+        // The scene phase, ordered and synchronous on the phone's main thread (SN-284): these two
+        // are the ONLY senders of `set_app_interactive` on the iPhone. `inactive` is also sent
+        // for `.background`, before "background" below, so the pins' clocks stop first.
+        "active" => crate::services::whisper_claims::set_app_interactive(true),
+        "inactive" => crate::services::whisper_claims::set_app_interactive(false),
         "background" => {
             info!("[iOS] moved to the background; flushing stores");
             // Also flushes the debounced stores.
