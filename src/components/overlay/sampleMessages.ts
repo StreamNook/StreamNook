@@ -354,8 +354,8 @@ const base = (
 const SAMPLE_ATMOSPHERE: OverlayAtmosphere = {
   baseColor: '#04070c',
   baseLayers: 'radial-gradient(ellipse 120% 60% at 50% 0%, rgba(45,212,191,0.10), transparent 65%)',
-  layers: 'repeating-linear-gradient(95deg, rgba(16,185,129,0) 0px, rgba(45,212,191,0.18) 120px, rgba(34,211,238,0.10) 200px, rgba(16,185,129,0) 320px)',
-  layers2: 'repeating-linear-gradient(88deg, rgba(34,211,238,0) 0px, rgba(34,211,238,0.12) 90px, rgba(139,92,246,0.10) 160px, rgba(34,211,238,0) 240px)',
+  layers: 'repeating-linear-gradient(95deg, rgba(16,185,129,0) 0px, rgba(45,212,191,0.18) 119.54px, rgba(34,211,238,0.10) 199.24px, rgba(16,185,129,0) 318.78px)',
+  layers2: 'repeating-linear-gradient(88deg, rgba(34,211,238,0) 0px, rgba(34,211,238,0.12) 89.95px, rgba(139,92,246,0.10) 159.90px, rgba(34,211,238,0) 239.85px)',
   chatEdge: 'linear-gradient(to bottom, transparent, rgba(45,212,191,0.85) 22%, rgba(34,211,238,0.75) 52%, rgba(139,92,246,0.6) 80%, transparent)',
   chatFrost: false,
 };

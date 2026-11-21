@@ -10,6 +10,13 @@ import { AtmosphereChatWash } from './overlay/AtmosphereChatWash';
 //   - 'profile' = full-panel backdrop (opaque base + drifting curtains).
 //   - 'chat'    = a translucent, readability-masked wash behind a message row
 //                 (no base, faded out toward the text) + a thin accent bar.
+
+// The curtains slide 320px (sn-aurora-1) and 240px (sn-aurora-2) per loop, so
+// they need at least that much overhang past each side or a strip of bare
+// base shows near the end of every loop and snaps back at the restart. 80%
+// alone falls short on cards under about 270px wide (the member hover card).
+const CURTAIN_OVERHANG = { left: 'min(-80%, -360px)', right: 'min(-80%, -360px)' } as const;
+
 export const AtmosphereBackground = ({
   atm,
   variant,
@@ -100,12 +107,12 @@ export const AtmosphereBackground = ({
     >
       <div
         className="sn-aurora-1 absolute -inset-[80%]"
-        style={{ backgroundImage: atm.layers, backgroundRepeat: 'repeat' }}
+        style={{ backgroundImage: atm.layers, backgroundRepeat: 'repeat', ...CURTAIN_OVERHANG }}
       />
       {atm.layers2 && (
         <div
           className="sn-aurora-2 absolute -inset-[80%]"
-          style={{ backgroundImage: atm.layers2, backgroundRepeat: 'repeat' }}
+          style={{ backgroundImage: atm.layers2, backgroundRepeat: 'repeat', ...CURTAIN_OVERHANG }}
         />
       )}
     </div>
