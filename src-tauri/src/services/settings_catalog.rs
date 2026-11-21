@@ -134,17 +134,168 @@ fn normalize(text: &str) -> String {
         .join(" ")
 }
 
+/// Whether a word of `haystack` starts with `token`; a phrase token must start
+/// at a word.
 fn has_word_prefix(haystack: &str, token: &str) -> bool {
+    if token.contains(' ') {
+        return format!(" {haystack}").contains(&format!(" {token}"));
+    }
     haystack.split(' ').any(|w| w.starts_with(token))
 }
 
-/// How well one row answers the query: every word must land somewhere; a hit
-/// in the title counts most, then an alias, the section, the page and the
-/// description. Zero means no match.
-fn score(row: &CatalogRow, query: &str) -> u32 {
-    let tokens: Vec<&str> = query.split(' ').filter(|t| !t.is_empty()).collect();
-    if tokens.is_empty() {
-        return 0;
+/// The words both settings searches share (the desktop one reads the same file
+/// through `src/components/settings/searchWords.ts`): filler a person types
+/// around what they mean, and groups of words for the same idea.
+#[derive(Deserialize)]
+struct SearchWords {
+    filler: Vec<String>,
+    groups: Vec<Vec<String>>,
+}
+
+static WORDS: Lazy<SearchWords> = Lazy::new(|| {
+    serde_json::from_str(include_str!("../../../src/components/settings/searchWords.json")).expect("searchWords.json")
+});
+
+static FILLER: Lazy<std::collections::HashSet<&'static str>> =
+    Lazy::new(|| WORDS.filler.iter().map(String::as_str).collect());
+
+static GROUP_OF: Lazy<std::collections::HashMap<&'static str, &'static [String]>> = Lazy::new(|| {
+    WORDS.groups.iter().flat_map(|g| g.iter().map(move |w| (w.as_str(), g.as_slice()))).collect()
+});
+
+static MAX_PHRASE: Lazy<usize> = Lazy::new(|| {
+    WORDS.groups.iter().flatten().chain(WORDS.filler.iter()).map(|w| w.split(' ').count()).max().unwrap_or(1)
+});
+
+/// Endings a whole-word match accepts, so "label" finds "labels" and "labeled".
+const SUFFIXES: &[&str] = &["", "s", "es", "e", "d", "ed", "er", "ing"];
+
+/// One idea of a query: what was typed for it, and other words that mean the same.
+#[derive(Clone, Debug, PartialEq)]
+struct Concept {
+    literal: String,
+    alike: Vec<String>,
+}
+
+/// A typed word with a plural or verb ending taken off ("names" -> "name").
+fn stem(w: &str) -> String {
+    let n = w.chars().count();
+    if n > 4 && w.ends_with("ing") {
+        return w[..w.len() - 3].to_string();
+    }
+    if n > 4 && w.ends_with("ed") {
+        return w[..w.len() - 2].to_string();
+    }
+    if n > 3 && w.ends_with('s') && !w.ends_with("ss") {
+        return w[..w.len() - 1].to_string();
+    }
+    w.to_string()
+}
+
+fn group_for(word: &str, stem: &str) -> Option<&'static [String]> {
+    [word.to_string(), stem.to_string(), format!("{stem}e"), format!("{word}s")]
+        .iter()
+        .find_map(|w| GROUP_OF.get(w.as_str()).copied())
+}
+
+/// The ideas in a normalized query, in the order typed, each once: filler is
+/// dropped, a phrase from a group is one idea, and each idea carries the other
+/// words of its group. Nothing but filler is searched as typed.
+fn query_concepts(query: &str) -> Vec<Concept> {
+    let words: Vec<&str> = query.split(' ').filter(|w| !w.is_empty()).collect();
+    let mut concepts: Vec<Concept> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut add = |literal: &str, id: &str, alike: Vec<String>| {
+        if !seen.insert(id.to_string()) {
+            return;
+        }
+        let mut unique: Vec<String> = Vec::new();
+        for w in alike {
+            if w != literal && !unique.contains(&w) {
+                unique.push(w);
+            }
+        }
+        concepts.push(Concept { literal: literal.to_string(), alike: unique });
+    };
+    let mut i = 0;
+    'outer: while i < words.len() {
+        for n in (2..=(*MAX_PHRASE).min(words.len() - i)).rev() {
+            let phrase = words[i..i + n].join(" ");
+            if FILLER.contains(phrase.as_str()) {
+                i += n;
+                continue 'outer;
+            }
+            if let Some(group) = GROUP_OF.get(phrase.as_str()) {
+                add(&phrase, &group[0], group.to_vec());
+                i += n;
+                continue 'outer;
+            }
+        }
+        let word = words[i];
+        i += 1;
+        if FILLER.contains(word) {
+            continue;
+        }
+        let stem = stem(word);
+        let group = group_for(word, &stem);
+        let mut alike: Vec<String> = group.map(<[String]>::to_vec).unwrap_or_default();
+        if stem != word && stem.chars().count() >= 3 {
+            alike.push(stem.clone());
+        }
+        alike.retain(|w| w != word);
+        let id = group.map(|g| g[0].clone()).unwrap_or_else(|| stem.clone());
+        add(word, &id, alike);
+    }
+    if concepts.is_empty() {
+        return words.iter().map(|w| Concept { literal: w.to_string(), alike: Vec::new() }).collect();
+    }
+    concepts
+}
+
+/// How many of a query's ideas a row must answer: all of one or two, most of more.
+fn concepts_required(count: usize) -> usize {
+    if count <= 2 {
+        count
+    } else {
+        (count * 3).div_ceil(5)
+    }
+}
+
+/// One searchable text of a row, as space-padded words and a word set.
+struct Field {
+    padded: String,
+    words: std::collections::HashSet<String>,
+}
+
+impl Field {
+    fn new(normalized: &str) -> Self {
+        Field {
+            padded: format!(" {normalized} "),
+            words: normalized.split(' ').filter(|w| !w.is_empty()).map(str::to_string).collect(),
+        }
+    }
+
+    /// Whether it holds `word` (or a phrase) as a whole word, with an ending allowed.
+    fn has_word(&self, word: &str) -> bool {
+        if word.contains(' ') {
+            SUFFIXES.iter().any(|s| self.padded.contains(&format!(" {word}{s} ")))
+        } else {
+            SUFFIXES.iter().any(|s| self.words.contains(&format!("{word}{s}")))
+        }
+    }
+
+    fn has_alike(&self, concept: &Concept) -> bool {
+        concept.alike.iter().any(|w| self.has_word(w))
+    }
+}
+
+/// How well one row answers the query, as (ideas answered, ideas typed exactly
+/// as the row says them, points); `None` when too few ideas land. A hit in the
+/// title counts most, then an alias, the section, the page and the
+/// description; a word that only means the same earns three quarters.
+fn score(row: &CatalogRow, query: &str, concepts: &[Concept]) -> Option<(usize, usize, u32)> {
+    if concepts.is_empty() {
+        return None;
     }
     let title = normalize(&row.title);
     let aliases: Vec<String> = row.aliases.iter().map(|a| normalize(a)).collect();
@@ -152,8 +303,16 @@ fn score(row: &CatalogRow, query: &str) -> u32 {
     let page = page_name(&row.page);
     let detail = normalize(&row.detail);
     let paths = row.paths.join(" ").replace(['.', '_'], " ");
-    let mut total: u32 = 0;
-    for token in &tokens {
+    let alike_fields = [
+        (Field::new(&title), 30u32),
+        (Field::new(&aliases.join(" ")), 16),
+        (Field::new(&section), 10),
+        (Field::new(page), 6),
+        (Field::new(&detail), 5),
+    ];
+    let (mut matched, mut exact, mut total) = (0usize, 0usize, 0u32);
+    for concept in concepts {
+        let token = concept.literal.as_str();
         let best = [
             (has_word_prefix(&title, token), 30),
             (title.contains(token), 20),
@@ -167,10 +326,17 @@ fn score(row: &CatalogRow, query: &str) -> u32 {
         .filter(|(hit, _)| *hit)
         .map(|(_, points)| *points)
         .max();
-        match best {
-            Some(points) => total += points,
-            None => return 0,
+        if let Some(points) = best {
+            matched += 1;
+            exact += 1;
+            total += points;
+        } else if let Some((_, points)) = alike_fields.iter().find(|(field, _)| field.has_alike(concept)) {
+            matched += 1;
+            total += points * 3 / 4;
         }
+    }
+    if matched < concepts_required(concepts.len()) {
+        return None;
     }
     if title == query {
         total += 60;
@@ -183,7 +349,7 @@ fn score(row: &CatalogRow, query: &str) -> u32 {
     if row.nested {
         total = total.saturating_sub(2);
     }
-    total
+    Some((matched, exact, total))
 }
 
 /// The rows that answer `query`, best first (at most `limit`).
@@ -193,15 +359,15 @@ pub fn search(query: &str, limit: usize) -> Vec<CatalogRow> {
 
 fn search_on(query: &str, limit: usize, ios: bool, has: &dyn Fn(&str) -> bool) -> Vec<CatalogRow> {
     let query = normalize(query);
-    let mut hits: Vec<(u32, usize, &CatalogRow)> = rows()
+    let concepts = query_concepts(&query);
+    let mut hits: Vec<((usize, usize, u32), usize, &CatalogRow)> = rows()
         .iter()
         .enumerate()
         .filter(|(_, row)| shown(row, ios, has))
-        .filter_map(|(i, row)| {
-            let s = score(row, &query);
-            (s > 0).then_some((s, i, row))
-        })
+        .filter_map(|(i, row)| score(row, &query, &concepts).map(|s| (s, i, row)))
         .collect();
+    // Most ideas answered first, then most typed exactly as the row says them,
+    // then where they landed; ties keep catalog order.
     hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     hits.into_iter().take(limit).map(|(_, _, row)| row.clone()).collect()
 }
@@ -265,6 +431,63 @@ mod tests {
         assert!(titles(&search("nightbot", 5)).contains(&"Known bots"));
         assert!(search("zzzz nothing", 5).is_empty());
         assert!(search("   ", 5).is_empty());
+    }
+
+    #[derive(Deserialize)]
+    struct WordCases {
+        concepts: Vec<ConceptCase>,
+        finds: Vec<FindCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct ConceptCase {
+        query: String,
+        literals: Vec<String>,
+        alike: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct FindCase {
+        query: String,
+        title: String,
+        top: usize,
+    }
+
+    fn word_cases() -> WordCases {
+        serde_json::from_str(include_str!("../../../src/components/settings/searchWords.cases.json")).unwrap()
+    }
+
+    /// The desktop search reads queries the same way (searchWords.test.ts runs these cases).
+    #[test]
+    fn queries_read_as_the_shared_cases_say() {
+        for case in word_cases().concepts {
+            let concepts = query_concepts(&normalize(&case.query));
+            let literals: Vec<&str> = concepts.iter().map(|c| c.literal.as_str()).collect();
+            assert_eq!(literals, case.literals, "{}", case.query);
+            for w in &case.alike {
+                assert!(concepts.iter().any(|c| c.alike.contains(w)), "{}: no concept accepts {w}", case.query);
+            }
+        }
+    }
+
+    /// Loose words find the row meant: "readability", "emote name beside" and
+    /// "name next to the emote" all came back empty before.
+    #[test]
+    fn loose_words_find_the_row_meant() {
+        for case in word_cases().finds {
+            let found = search_on(&case.query, case.top, false, &everything);
+            assert!(titles(&found).contains(&case.title.as_str()), "{} gave {:?}", case.query, titles(&found));
+        }
+        assert_eq!([1, 2, 3, 4, 5, 6].map(concepts_required), [1, 2, 2, 3, 3, 4]);
+    }
+
+    #[test]
+    fn a_word_that_only_means_the_same_ranks_below_the_word_itself() {
+        // "Emote words" says "emote captions"; its nested Word size row says neither word exactly.
+        let found = search_on("emote captions", 10, false, &everything);
+        assert_eq!(titles(&found).first(), Some(&"Emote words"));
+        assert!(Field::new("show the word typed with each emote").has_word("with each"));
+        assert!(!Field::new("show the word typed").has_word("ype"));
     }
 
     #[test]

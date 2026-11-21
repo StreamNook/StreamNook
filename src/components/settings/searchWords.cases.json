@@ -1,0 +1,30 @@
+{
+  "about": "Run by both settings searches (searchWords.test.ts and settings_catalog.rs tests). concepts: what a query reads as, each concept's typed literal in order, plus words some concept must also accept. finds: a row both the desktop index and the phone catalog must rank within the top N for words people really typed.",
+  "concepts": [
+    { "query": "readability", "literals": ["readability"], "alike": ["readable", "hard to read"] },
+    { "query": "emote names", "literals": ["emote", "names"], "alike": ["name", "label", "caption", "emoji"] },
+    { "query": "emote labels", "literals": ["emote", "labels"], "alike": ["word"] },
+    { "query": "name next to the emote", "literals": ["name", "next to", "emote"], "alike": ["beside", "under", "after"] },
+    { "query": "emote name beside", "literals": ["emote", "name", "beside"], "alike": ["next to"] },
+    {
+      "query": "the 7tv readability thing where the emote name is next to the emote",
+      "literals": ["7tv", "readability", "emote", "name", "next to"],
+      "alike": ["seventv", "readable", "beside"]
+    },
+    { "query": "hard to read emotes", "literals": ["hard to read", "emotes"], "alike": ["emote", "readability"] },
+    { "query": "make the chat bigger", "literals": ["chat", "bigger"], "alike": ["size", "scale"] },
+    { "query": "turn off animations", "literals": ["animations"], "alike": ["animation", "motion"] },
+    { "query": "the a", "literals": ["the", "a"], "alike": [] }
+  ],
+  "finds": [
+    { "query": "readability", "title": "Emote words", "top": 3 },
+    { "query": "emote names", "title": "Emote words", "top": 3 },
+    { "query": "emote labels", "title": "Emote words", "top": 3 },
+    { "query": "name next to the emote", "title": "Emote words", "top": 3 },
+    { "query": "emote name beside", "title": "Emote words", "top": 3 },
+    { "query": "the 7tv readability thing where the emote name is next to the emote", "title": "Emote words", "top": 3 },
+    { "query": "7tv readability", "title": "Emote words", "top": 3 },
+    { "query": "captions under emotes", "title": "Emote words", "top": 3 },
+    { "query": "hard to read emotes", "title": "Emote words", "top": 3 }
+  ]
+}
