@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Gift } from 'phosphor-react';
+import { Coins, Gift, Trophy } from 'phosphor-react';
 import type { HypeTrainData } from '../types';
 import ConfettiBurst from './ConfettiBurst';
 import { Logger } from '../utils/logger';
@@ -12,7 +12,7 @@ import { GLAZE_BANNER } from './ui/glazeButtons';
 import { useAppStore } from '../stores/AppStore';
 import { usePerformanceQuiet } from '../utils/lowPower';
 import { parseBadges } from '../services/twitchBadges';
-import { HYPE_LOOK_FILL, hypeTrainLook } from '../utils/hypeTrainLook';
+import { confettiColors, justStarted, lookName, namesTrain, paletteStyle, trainPalette } from '../utils/hypeTrainLook';
 
 // The decorated Twitch Hype Train bar, extracted from ChatWidget so every
 // surface (the main player chat, MultiChat split/tab panes, and the blended
@@ -75,8 +75,9 @@ interface HypeTrainBannerProps {
    *  omitted, the bar + flash still play but no full-area confetti rains. */
   confettiTarget?: HTMLElement | null;
   /** When set, the owner throws the level-up confetti itself (so what lands
-   *  on its composer outlives the bar), and `confettiTarget` is not used. */
-  onLevelUp?: (golden: boolean) => void;
+   *  on its composer outlives the bar), and `confettiTarget` is not used.
+   *  `colors` is the train kind's palette for the confetti (empty: rainbow). */
+  onLevelUp?: (golden: boolean, colors: string[]) => void;
   /** Fired when the countdown reaches 0, so the owner can clear its own state.
    *  The main player chat clears the global hype train here; pane/blended
    *  pollers manage their own removal, so they can leave this unset. */
@@ -116,7 +117,13 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
   // The level side steps down in place while it overflows (CSS
   // `.hype-train-level[data-density]` says what each step drops).
   const [levelEl, setLevelEl] = useState<HTMLDivElement | null>(null);
-  useEffect(() => (levelEl ? fitHeaderDensity(levelEl, 2, 0) : undefined), [levelEl]);
+  useEffect(() => (levelEl ? fitHeaderDensity(levelEl, 4, 0) : undefined), [levelEl]);
+  // The kind of train (Rust's look): its palette, name, marks and words.
+  const trainLook = train.look ?? null;
+  const palette = trainPalette(train);
+  // "The Heist Is On!": a kind's kickoff words cross once as its train begins.
+  const [kickoff, setKickoff] = useState<string | null>(null);
+  const kickoffWords = trainLook?.kickoff ?? null;
   // The level the celebration announces. A bar reset can fire it a beat
   // before Twitch's level field moves, so it is worked out at the trigger.
   const [celebrationLevel, setCelebrationLevel] = useState(0);
@@ -126,6 +133,16 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
   const perfQuiet = usePerformanceQuiet();
   const instant = motionMode === 'off' || perfQuiet;
   const stillWords = motionMode === 'off' || motionMode === 'reduced' || prefersReducedMotion();
+  useEffect(() => {
+    if (kickoffWords && train.level <= 1 && justStarted(train.started_at, Date.now())) setKickoff(kickoffWords);
+    // Once per train, as it first shows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [train.id, kickoffWords]);
+  useEffect(() => {
+    if (!kickoff) return;
+    const t = setTimeout(() => setKickoff(null), stillWords ? STILL_MS : WORDS_MAX_MS + 1500);
+    return () => clearTimeout(t);
+  }, [kickoff, stillWords]);
 
   // Smooth countdown, updated every second locally. On hitting 0 it fires
   // onExpire (the owner clears the train) rather than waiting for the next poll.
@@ -186,7 +203,8 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
       setCelebrationLevel(leveledUp ? train.level : Math.max(train.level, prevLevel) + 1);
       setIsLevelUpCelebration(true);
       setCelebrationId((id) => id + 1);
-      onLevelUpRef.current?.(!!train.is_golden_kappa);
+      onLevelUpRef.current?.(train.look ? train.look.kind === 'golden_kappa' : !!train.is_golden_kappa, confettiColors(trainPalette(train)));
+      setKickoff(null);
     } else if (!isLevelUpCelebration) {
       setDisplayedLevel(train.level);
     }
@@ -221,18 +239,20 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
   const remaining = Math.max(0, train.goal - train.progress);
   const bitsNeeded = remaining; // 1 bit = 1 point
   const subsNeeded = Math.ceil(remaining / 500); // 1 Tier1 sub = 500 points
-  const look = hypeTrainLook(train);
-  const isGolden = look === 'golden';
+  const isGolden = trainLook ? trainLook.kind === 'golden_kappa' : !!train.is_golden_kappa;
+  const named = namesTrain(trainLook);
   const bitsGem = useBitsGem(train.broadcaster_user_login, bitsNeeded);
   // The track fills to the brim while a level-up is celebrated.
   const shown = isLevelUpCelebration ? 100 : percentage;
+  // The top row makes way for crossing words: a level-up's, or a kickoff's.
+  const wordsUp = isLevelUpCelebration || !!kickoff;
 
   return (
     <>
       {/* Level-up confetti. Bursts up from the bar and falls the full height of
           the host container. Portalled so it covers the whole chat/feed. */}
       {isLevelUpCelebration && confettiTarget && !onLevelUp &&
-        createPortal(<ConfettiBurst key={celebrationId} golden={!!isGolden} />, confettiTarget)}
+        createPortal(<ConfettiBurst key={celebrationId} golden={!!isGolden} colors={confettiColors(palette)} />, confettiTarget)}
 
       {/* The bar: a glaze card with two rows. The top row says where the
           train stands (level, what is still needed, time left); the bottom is
@@ -240,21 +260,39 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
           row makes way for the words and the track fills to the brim. */}
       <div
         className={`hype-train-card ${GLAZE_BANNER} ${floating ? '' : 'chrome-glaze--flat'} relative ${compact ? '' : 'mt-2'} overflow-hidden pointer-events-none`}
-        style={CARD_STYLE}
-        data-look={look}
+        style={{ ...CARD_STYLE, ...paletteStyle(palette) }}
+        data-look={lookName(trainLook)}
+        data-themed={palette ? '' : undefined}
       >
+        {/* A kind's own colors (Rust's palette) wash the card under its rows. */}
+        {palette && <div className="hype-train-tint absolute inset-0" aria-hidden />}
         <div className={`relative px-2.5 ${compact ? 'pt-[5px] pb-2' : 'pt-[7px] pb-2'}`}>
           <div className={`relative ${rowH}`}>
             <div
               className={`absolute inset-0 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 transition-opacity duration-200 ${
-                isLevelUpCelebration ? 'opacity-0' : 'opacity-100'
+                wordsUp ? 'opacity-0' : 'opacity-100'
               }`}
             >
-              {/* Level and what is still needed. Too narrow for all of it,
-                  the subs go first, then the bits; the level stays whole. */}
+              {/* The train's short name, its level, what is still needed and
+                  a treasure train's discount. Too narrow for all of it, the
+                  subs go first, then the words "to go", then the discount,
+                  then the name. The level and the amount still needed (the
+                  bits) never go. */}
               <div ref={setLevelEl} className="hype-train-level flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+                {trainLook?.all_time_high && (
+                  <Trophy size={12} weight="fill" className="hype-train-mark shrink-0" aria-label="All-time high" />
+                )}
+                {named && (
+                  <span
+                    className={`hype-train-name text-[12.5px] font-bold ${lead} text-textPrimary`}
+                    aria-label={trainLook?.name}
+                  >
+                    {trainLook?.bar_name}
+                  </span>
+                )}
                 <span className={`text-[12.5px] font-semibold ${lead} text-textPrimary`}>
-                  Level <LevelNumber level={displayedLevel || train.level} instant={instant} rowH={rowH} />
+                  {named ? 'Lv ' : 'Level '}
+                  <LevelNumber level={displayedLevel || train.level} instant={instant} rowH={rowH} />
                 </span>
                 {remaining > 0 ? (
                   // What the next level still needs, as marks: the bits gem and
@@ -276,10 +314,19 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
                         </span>
                       </span>
                     </span>
-                    <span className={`text-[11.5px] ${lead} text-textSecondary`} aria-hidden>to go</span>
+                    <span className={`hype-train-togo text-[11.5px] ${lead} text-textSecondary`} aria-hidden>to go</span>
                   </span>
                 ) : (
                   <span className={`hype-train-left text-[11.5px] ${lead} text-textSecondary`}>Level up incoming</span>
+                )}
+                {trainLook?.treasure_short && (
+                  <span
+                    className={`hype-train-treasure hype-train-need flex ${rowH} items-center gap-1 rounded-full px-[7px] text-[11px] font-semibold text-textPrimary tabular-nums`}
+                    aria-label={trainLook.treasure_words ?? trainLook.treasure_short}
+                  >
+                    <Coins size={11} weight="fill" className="hype-train-mark shrink-0" aria-hidden />
+                    <span aria-hidden>{trainLook.treasure_short}</span>
+                  </span>
                 )}
               </div>
               {timeRemaining && (
@@ -299,6 +346,17 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
                 onDone={endCelebration}
               />
             )}
+            {kickoff && !isLevelUpCelebration && (
+              <LevelUpWords
+                key={`kickoff-${train.id}`}
+                level={train.level}
+                message=""
+                headline={kickoff}
+                still={stillWords}
+                lead={lead}
+                onDone={() => setKickoff(null)}
+              />
+            )}
           </div>
           {/* Compact, the row is the track's own 6 px and the percentage
               centers on it, overhanging the gaps above and below. */}
@@ -316,7 +374,7 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
               />
               <div className="hype-train-meter absolute inset-0 overflow-hidden rounded-full">
                 <div
-                  className={`hype-train-meter-fill absolute inset-0 ${HYPE_LOOK_FILL[look]}`}
+                  className={`hype-train-meter-fill absolute inset-0 ${palette ? 'hype-train-progress-themed' : 'hype-train-progress-rainbow'}`}
                   style={{ clipPath: `inset(0 ${100 - shown}% 0 0 round 999px)` }}
                 >
                   {/* Now and then a light runs along the fill. */}
@@ -557,7 +615,22 @@ const STILL_MS = 5000;
  *  once, behind soft edge fades, and `onDone` fires as they leave, so they
  *  are never cut off. With motion off or reduced they stand still in the
  *  middle, ending in an ellipsis if they do not fit. */
-function LevelUpWords({ level, message, still, lead, onDone }: { level: number; message: string; still: boolean; lead: string; onDone: () => void }) {
+function LevelUpWords({
+  level,
+  message,
+  headline,
+  still,
+  lead,
+  onDone,
+}: {
+  level: number;
+  message: string;
+  /** In place of "Level n!": a kind's kickoff ("The Heist Is On!"). */
+  headline?: string;
+  still: boolean;
+  lead: string;
+  onDone: () => void;
+}) {
   const boxRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLSpanElement>(null);
   const [run, setRun] = useState<{ from: number; to: number; ms: number } | null>(null);
@@ -570,8 +643,10 @@ function LevelUpWords({ level, message, still, lead, onDone }: { level: number; 
     const to = -text.scrollWidth;
     const ms = Math.min(WORDS_MAX_MS, Math.max(WORDS_MIN_MS, ((from - to) / WORDS_PX_PER_S) * 1000));
     setRun({ from, to, ms });
-  }, [still, message, level]);
-  const words = (
+  }, [still, message, level, headline]);
+  const words = headline ? (
+    <span className="hype-train-words-lead">{headline}</span>
+  ) : (
     <>
       <span className="hype-train-words-lead">Level {level}!</span> {message}
     </>

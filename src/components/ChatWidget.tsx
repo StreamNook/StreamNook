@@ -1390,9 +1390,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // celebration, or the train itself, has ended. `burst` counts level-ups so
   // each one throws another handful into the same canvas.
   const [chatContainerEl, setChatContainerEl] = useState<HTMLElement | null>(null);
-  const [hypeConfetti, setHypeConfetti] = useState<{ burst: number; golden: boolean } | null>(null);
-  const throwHypeConfetti = useCallback((golden: boolean) => {
-    setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden }));
+  const [hypeConfetti, setHypeConfetti] = useState<{ burst: number; golden: boolean; colors: string[] } | null>(null);
+  const throwHypeConfetti = useCallback((golden: boolean, colors: string[]) => {
+    setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden, colors }));
   }, []);
   const hypeConfettiDone = useCallback(() => setHypeConfetti(null), []);
   // How tall the floating chat header currently is. It is absolutely positioned
@@ -5006,6 +5006,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           <ConfettiBurst
             burst={hypeConfetti.burst}
             golden={hypeConfetti.golden}
+            colors={hypeConfetti.colors}
             perchOn=".sn-composer-row"
             onDone={hypeConfettiDone}
           />

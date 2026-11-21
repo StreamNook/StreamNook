@@ -13,6 +13,7 @@ import { previewStamp } from '../followRefresh';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { isTwitchStream, streamProvider } from '../../utils/streamProvider';
 import { CardChip } from '../../components/ui/CardChip';
+import { HypeTrainChip, type HypeTrainBadgeInfo } from '../../components/ui/HypeTrainChip';
 import { TogetherTag } from '../../components/SharedViewers';
 import { useAppStore } from '../../stores/AppStore';
 import { groupFor } from '../../utils/sharedViewers';
@@ -32,24 +33,10 @@ function thumbUrl(stream: TwitchStream): string {
   return `${base}${base.includes('?') ? '&' : '?'}sn=${previewStamp()}`;
 }
 
-export interface HypeTrainBadgeInfo {
-  level: number;
-  isGolden?: boolean;
-}
+export type { HypeTrainBadgeInfo };
 
-const HypeTrainBadge: React.FC<{ info: HypeTrainBadgeInfo }> = ({ info }) => (
-  <CardChip kind={info.isGolden ? 'hype-golden' : 'hype'}>
-    <svg className="w-2.5 h-2.5" viewBox="0 0 15 13" fill="none">
-      <path
-        fillRule="evenodd"
-        clipRule="evenodd"
-        d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z"
-        fill="currentColor"
-      />
-    </svg>
-    <span>LVL {info.level}</span>
-  </CardChip>
-);
+/** The big card's hype chip: the kind's color and word ("HEIST 5"). */
+const HypeTrainBadge: React.FC<{ info: HypeTrainBadgeInfo }> = ({ info }) => <HypeTrainChip info={info} />;
 
 const StreakBadge: React.FC<{ streak: number }> = ({ streak }) => (
   // The shared card chip, flat: an opaque-enough fill rather than a backdrop
@@ -134,9 +121,13 @@ export const MobileStreamCard: React.FC<{
             </CardChip>
           )}
           {hypeTrain && (
+            // Too small for the kind's word: its color says it, its name is
+            // read out.
             <CardChip
-              kind={hypeTrain.isGolden ? 'hype-golden' : 'hype'}
+              kind={hypeTrain.isGolden && !hypeTrain.look?.palette ? 'hype-golden' : 'hype'}
+              aria-label={`${hypeTrain.look?.name ?? 'Hype train'} level ${hypeTrain.level}`}
               style={{
+                ...(hypeTrain.look?.palette ? ({ '--color-accent': hypeTrain.look.palette.badge } as React.CSSProperties) : {}),
                 position: 'absolute',
                 bottom: 4,
                 left: 4,

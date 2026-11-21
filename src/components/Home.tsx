@@ -67,6 +67,7 @@ import { stopArgs, stopToast } from '../utils/dropsStop';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { gameBoxArt } from '../utils/boxArt';
 import { CardChip } from './ui/CardChip';
+import { HypeTrainChip } from './ui/HypeTrainChip';
 import { AutomationPulse } from './ui/AutomationPulse';
 import { TogetherChip } from './SharedViewers';
 import { groupFor } from '../utils/sharedViewers';
@@ -2159,12 +2160,7 @@ const Home = () => {
                                                                         </CardChip>
                                                                     )}
                                                                     {activeHypeTrainChannels.get(stream.user_id) && (
-                                                                        <CardChip kind={activeHypeTrainChannels.get(stream.user_id)?.isGolden ? 'hype-golden' : 'hype'}>
-                                                                            <svg className="w-2.5 h-2.5" viewBox="0 0 15 13" fill="none">
-                                                                                <path fillRule="evenodd" clipRule="evenodd" d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z" fill="currentColor" />
-                                                                            </svg>
-                                                                            <span>LVL {activeHypeTrainChannels.get(stream.user_id)?.level}</span>
-                                                                        </CardChip>
+                                                                        <HypeTrainChip info={activeHypeTrainChannels.get(stream.user_id)!} />
                                                                     )}
                                                                 </div>
                                                                 <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1">
@@ -3830,12 +3826,7 @@ const Home = () => {
                                                                             </CardChip>
                                                                         )}
                                                                         {activeHypeTrainChannels.get(stream.user_id) && (
-                                                                            <CardChip kind={activeHypeTrainChannels.get(stream.user_id)?.isGolden ? 'hype-golden' : 'hype'}>
-                                                                                <svg className="w-2.5 h-2.5" viewBox="0 0 15 13" fill="none">
-                                                                                    <path fillRule="evenodd" clipRule="evenodd" d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z" fill="currentColor" />
-                                                                                </svg>
-                                                                                <span>LVL {activeHypeTrainChannels.get(stream.user_id)?.level}</span>
-                                                                            </CardChip>
+                                                                            <HypeTrainChip info={activeHypeTrainChannels.get(stream.user_id)!} />
                                                                         )}
                                                                     </div>
                                                                     <CardChip kind="neutral" className="absolute bottom-1.5 left-1.5">

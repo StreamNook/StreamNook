@@ -238,9 +238,9 @@ export const WatchScreen: React.FC = () => {
   // The hype train's level-up confetti, thrown over the chat column as on
   // desktop (ChatWidget): some lands on the composer's controls and stays
   // until a finger brushes or taps it off. `burst` counts level-ups.
-  const [hypeConfetti, setHypeConfetti] = useState<{ burst: number; golden: boolean } | null>(null);
-  const throwHypeConfetti = useCallback((golden: boolean) => {
-    setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden }));
+  const [hypeConfetti, setHypeConfetti] = useState<{ burst: number; golden: boolean; colors: string[] } | null>(null);
+  const throwHypeConfetti = useCallback((golden: boolean, colors: string[]) => {
+    setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden, colors }));
   }, []);
   const hypeConfettiDone = useCallback(() => setHypeConfetti(null), []);
   const [pip, setPip] = useState(false);
@@ -2273,6 +2273,7 @@ export const WatchScreen: React.FC = () => {
             <ConfettiBurst
               burst={hypeConfetti.burst}
               golden={hypeConfetti.golden}
+              colors={hypeConfetti.colors}
               perchOn=".sn-m-composer-row"
               onDone={hypeConfettiDone}
             />

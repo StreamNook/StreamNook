@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, ModLogEvent, DropProgressStatus, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat, OfflineRoom } from '../types';
+import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, ModLogEvent, DropProgressStatus, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, HypeTrainLookData, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat, OfflineRoom } from '../types';
 import { trackActivity } from '../services/logService';
 import { Logger, setDiagnosticsEnabled } from '../utils/logger';
 import { noticeHidden, type NoticeId } from '../utils/notices';
@@ -619,7 +619,7 @@ export interface AppState {
   currentHypeTrain: HypeTrainData | null;
   setCurrentHypeTrain: (train: HypeTrainData | null) => void;
   // Hype Train status for stream badges (channel_id -> { level, isGolden })
-  activeHypeTrainChannels: Map<string, { level: number; isGolden: boolean }>;
+  activeHypeTrainChannels: Map<string, { level: number; isGolden: boolean; look?: HypeTrainLookData }>;
   /** Something says the stream ended; Rust confirms and decides. `'player'`
    *  when the player stalled, so a stream still live is reloaded in place. */
   handleStreamOffline: (trigger?: 'player') => Promise<void>;
@@ -1830,10 +1830,10 @@ function followingFields(
 /** Publish hype-train statuses only when the content changed (see the
  *  comment in refreshHypeTrainStatuses for why). */
 function applyHypeStatuses(results: HypeTrainBulkStatus[]) {
-  const newMap = new Map<string, { level: number; isGolden: boolean }>();
+  const newMap = new Map<string, { level: number; isGolden: boolean; look?: HypeTrainLookData }>();
   for (const result of results) {
     if (result.is_active) {
-      newMap.set(result.channel_id, { level: result.level, isGolden: result.is_golden_kappa });
+      newMap.set(result.channel_id, { level: result.level, isGolden: result.is_golden_kappa, look: result.look });
     }
   }
   const current = useAppStore.getState().activeHypeTrainChannels;
@@ -1841,7 +1841,13 @@ function applyHypeStatuses(results: HypeTrainBulkStatus[]) {
   if (same) {
     for (const [id, next] of newMap) {
       const prev = current.get(id);
-      if (!prev || prev.level !== next.level || prev.isGolden !== next.isGolden) {
+      if (
+        !prev ||
+        prev.level !== next.level ||
+        prev.isGolden !== next.isGolden ||
+        prev.look?.name !== next.look?.name ||
+        prev.look?.palette?.badge !== next.look?.palette?.badge
+      ) {
         same = false;
         break;
       }

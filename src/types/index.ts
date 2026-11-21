@@ -2295,6 +2295,49 @@ export interface HypeTrainBulkStatus {
   is_active: boolean;
   level: number;
   is_golden_kappa: boolean;
+  /** The kind of train, for the badge's color and word. */
+  look?: HypeTrainLookData;
+}
+
+/** How a themed train is painted (Rust `hype_train_kind::Palette`). */
+export interface HypeTrainPalette {
+  /** The card's gradient, left to right. */
+  background: string[];
+  /** The timer ring, the level words, the marks. */
+  accent: string;
+  /** The track's fill. */
+  fill: string;
+  /** The stream card chip's one color. */
+  badge: string;
+}
+
+/** The kind of hype train and everything the bars say about it, decided in
+ *  Rust (`services/hype_train_kind.rs` `TrainLook`); the apps draw it and pick
+ *  no colors of their own. */
+export interface HypeTrainLookData {
+  /** regular | golden_kappa | treasure | mythic | community | pinata */
+  kind: string;
+  /** 'heist': a regular train in Twitch's GTA VI theme. */
+  theme: string | null;
+  shared: boolean;
+  all_time_high: boolean;
+  treasure: { discount_percent: number; unlock_level: number } | null;
+  /** "Hype Train", "Heist Train", "Shared Heist Train", ... */
+  name: string;
+  /** The card chip's word ("Heist", "Golden"); empty for a plain train. */
+  short_name: string;
+  /** What the bar says as the train starts ("The Heist Is On!"). */
+  kickoff: string | null;
+  /** "-35% gifts from L5": read out, and the chip's tooltip. */
+  treasure_words: string | null;
+  /** The bar's short name ("Heist", "Shared Heist", "Golden Kappa"), so the
+   *  amount still needed always fits beside it; empty for a plain train. */
+  bar_name: string;
+  /** The bar's treasure chip: "-35% at L5". */
+  treasure_short: string | null;
+  /** null: the app's own rainbow (a regular train). */
+  palette: HypeTrainPalette | null;
+  channel_color: string | null;
 }
 
 /** The Rust-owned Home snapshot (src-tauri/src/services/home_snapshot.rs):
@@ -3544,6 +3587,8 @@ export interface HypeTrainData {
   /** Twitch's gift sub art (the Sub Gifter badge), from Rust's watch; the
    *  iPhone's subs mark. Desktop and Android read their own badge cache. */
   gift_art?: string | null;
+  /** The kind of train and how the bar draws it (Rust's watch). */
+  look?: HypeTrainLookData;
 }
 
 /** A chatter's sub in a channel, with its words. Mirrors `SubStanding` in

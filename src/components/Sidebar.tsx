@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, ensureHomeSnapshotSync, announceSidebar, refreshDiscover } from '../stores/AppStore';
 import { ChevronLeft, ChevronRight, Users, Sparkles, Radio, Heart, Flame, Star } from 'lucide-react';
 import { Package } from 'phosphor-react';
-import type { TwitchStream } from '../types';
+import type { HypeTrainLookData, TwitchStream } from '../types';
 import { getSidebarSettings, type SidebarMode } from './settings/InterfaceSettings';
 import { providerLabel, type ProviderId } from '../types/providers';
 
@@ -78,7 +78,14 @@ const persistWidth = (width: number): void => {
 
 // Pure helper: format a viewer count like 12300 -> "12.3K".
 
-type HypeTrainStatus = { level: number; isGolden: boolean };
+type HypeTrainStatus = { level: number; isGolden: boolean; look?: HypeTrainLookData };
+
+/** The sidebar's hype mark: the kind's badge color (Rust's look) when it has
+ *  one, else gold for a Golden Kappa train and purple for the rest. */
+const hypeMark = (s: HypeTrainStatus) => ({
+  color: s.look?.palette?.badge ?? (s.isGolden ? '#eab308' : '#9333ea'),
+  words: `${s.look?.name ?? 'Hype Train'} LVL ${s.level}`,
+});
 
 interface SectionHeaderProps {
     icon: any;
@@ -238,8 +245,11 @@ const StreamItem = memo(({
                 )}
                 {/* Hype Train indicator on avatar - only show in compact mode when no drops */}
                 {hypeTrainStatus && !showExpanded && !hasDrops && (
-                    <Tooltip content={`Hype Train LVL ${hypeTrainStatus.level}`} delay={100} side="right">
-                        <div className={`absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center border border-background ${hypeTrainStatus.isGolden ? 'bg-yellow-500' : 'bg-purple-600'}`}>
+                    <Tooltip content={hypeMark(hypeTrainStatus).words} delay={100} side="right">
+                        <div
+                            className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center border border-background"
+                            style={{ backgroundColor: hypeMark(hypeTrainStatus).color }}
+                        >
                             <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 15 13" fill="none">
                                 <path fillRule="evenodd" clipRule="evenodd" d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z" fill="currentColor" />
                             </svg>
@@ -287,8 +297,8 @@ const StreamItem = memo(({
                         )}
                         {/* Hype Train indicator - show next to game name */}
                         {hypeTrainStatus && (
-                            <Tooltip content={`Hype Train LVL ${hypeTrainStatus.level}`} delay={100} side="top">
-                                <span className={`flex items-center gap-0.5 ${hypeTrainStatus.isGolden ? 'text-yellow-400' : 'text-purple-400'} flex-shrink-0`}>
+                            <Tooltip content={hypeMark(hypeTrainStatus).words} delay={100} side="top">
+                                <span className="flex items-center gap-0.5 flex-shrink-0" style={{ color: hypeMark(hypeTrainStatus).color }}>
                                     <svg className="w-2.5 h-2.5" viewBox="0 0 15 13" fill="none">
                                         <path fillRule="evenodd" clipRule="evenodd" d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z" fill="currentColor" />
                                     </svg>

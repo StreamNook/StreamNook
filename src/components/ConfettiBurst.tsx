@@ -301,8 +301,23 @@ function nearestHalfTurn(from: number, to: number): number {
   return from + d;
 }
 
+/** Paper for a train kind's own colors (Rust's palette): each color on the
+ *  front, a darker shade of it on the back. */
+function pairsOf(colors: string[]): ColorPair[] {
+  return colors.map((front) => {
+    const hex = /^#?([0-9a-f]{6})$/i.exec(front.trim())?.[1];
+    if (!hex) return { front, back: front };
+    const n = parseInt(hex, 16);
+    const dark = (shift: number) => Math.round(((n >> shift) & 0xff) * 0.8);
+    const back = `#${[dark(16), dark(8), dark(0)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+    return { front: `#${hex}`, back };
+  });
+}
+
 interface ConfettiBurstProps {
   golden?: boolean;
+  /** A train kind's palette (Rust's); when set it wins over `golden`. */
+  colors?: string[];
   /** Bump to throw another burst into this canvas, keeping what has landed. */
   burst?: number;
   /** Selector for a row inside the host whose direct children catch confetti. */
@@ -315,15 +330,17 @@ interface Engine {
   spawn: (colors: ColorPair[]) => void;
 }
 
-export default function ConfettiBurst({ golden = false, burst = 0, perchOn, onDone }: ConfettiBurstProps) {
+export default function ConfettiBurst({ golden = false, colors, burst = 0, perchOn, onDone }: ConfettiBurstProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const onDoneRef = useRef(onDone);
   const goldenRef = useRef(golden);
+  const colorsRef = useRef(colors);
   // First, so the burst effect below already reads this render's colors.
   useEffect(() => {
     onDoneRef.current = onDone;
     goldenRef.current = golden;
+    colorsRef.current = colors;
   });
 
   useEffect(() => {
@@ -887,7 +904,8 @@ export default function ConfettiBurst({ golden = false, burst = 0, perchOn, onDo
 
   // Each burst (the first on mount, then every bump) throws a fresh handful.
   useEffect(() => {
-    engineRef.current?.spawn(goldenRef.current ? GOLD : RAINBOW);
+    const own = colorsRef.current?.length ? pairsOf(colorsRef.current) : null;
+    engineRef.current?.spawn(own ?? (goldenRef.current ? GOLD : RAINBOW));
   }, [burst, perchOn]);
 
   return <canvas ref={canvasRef} className="absolute inset-0 z-30 pointer-events-none" aria-hidden="true" />;
