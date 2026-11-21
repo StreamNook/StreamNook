@@ -351,7 +351,7 @@ fn drop_row(drop: &TimeBasedDrop, now_ms: i64) -> DropRow {
     } else if done {
         "Ready".to_string()
     } else if need > 0 {
-        drop_words::to_watch(need - have)
+        drop_words::watch_status(drop, need - have)
     } else {
         String::new()
     };

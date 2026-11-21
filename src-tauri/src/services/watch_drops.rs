@@ -737,7 +737,7 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
     } else if !started {
         "Starts when you watch".to_string()
     } else {
-        drop_words::to_watch(r.need - r.shown)
+        drop_words::watch_status(d, r.need - r.shown)
     };
     HereDrop {
         id: d.id.clone(),
@@ -805,7 +805,7 @@ fn lead_drop(c: &DropCampaign, rows: &[Row], at: usize, i: &Inputs) -> WatchDrop
     } else if r.ready {
         "Ready".to_string()
     } else {
-        drop_words::to_watch(left)
+        drop_words::watch_status(d, left)
     };
     WatchDrop {
         campaign_id: c.id.clone(),

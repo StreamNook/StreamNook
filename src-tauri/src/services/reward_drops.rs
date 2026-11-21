@@ -169,8 +169,14 @@ fn group_drop(
     let mut pool_ids: Vec<String> = Vec::new();
     let mut unheld: Vec<&Value> = Vec::new();
     let mut pool_rewards: Vec<PoolReward> = Vec::new();
+    // A daily chest whose pool has one reward per day (GTAVI's six chains)
+    // is a ladder: each watched day gives the next one, in Twitch's order.
+    let mut ladder: Vec<&Value> = Vec::new();
     for reward in group["rewards"].as_array().into_iter().flatten() {
         let pool: Vec<&Value> = reward["pool"]["rewards"].as_array().into_iter().flatten().collect();
+        if !is_sub && repeats > 1 && pool.len() == repeats as usize {
+            ladder = pool.clone();
+        }
         if pool.len() > 1 {
             random_of = Some(pool.len() as u32);
             unheld.extend(pool.iter().copied().filter(|p| {
@@ -216,8 +222,19 @@ fn group_drop(
     // Twitch holds this tier until the campaign's other rewards are earned
     // (the GTAVI Golden Iguana, a Great Ball's watch tier before a ball is
     // held). It can still say CLAIMABLE once the minutes are in, and a claim
-    // then gives nothing, so it is never ready and never claimed.
-    let held_back = own.is_some_and(|s| s["hasPreconditionsMet"].as_bool() == Some(false));
+    // then gives nothing, so it is never ready and never claimed. Twitch does
+    // not always say so: the Iguana reads `hasPreconditionsMet: true` and
+    // IN_PROGRESS at 953 of its 60 minutes (read 2026-11-19). A one-day watch
+    // tier whose minutes are past its need while Twitch still holds it is
+    // waiting on something else, so it is held back too.
+    let held_back = own.is_some_and(|s| {
+        s["hasPreconditionsMet"].as_bool() == Some(false)
+            || (!is_sub
+                && repeats == 1
+                && required_minutes > 0
+                && s["status"].as_str() == Some("IN_PROGRESS")
+                && uint(&s["currentMinutesWatched"]) > required_minutes)
+    });
     let progress = own.and_then(|s| {
         let status = s["status"].as_str().unwrap_or_default();
         let minutes = uint(&s["currentMinutesWatched"]);
@@ -327,6 +344,23 @@ fn group_drop(
     };
     // One already held is simply claimed, whatever Twitch says it needs.
     let needs_earlier = held_back && !progress.as_ref().is_some_and(|p| p.is_claimed);
+    // What this tier gives next. A ladder gives the reward after the days
+    // already granted (`grantCount`), so the chest reads "Silver Chain" on
+    // day 3, not the chest. Otherwise, Twitch never repeats a reward from a
+    // pool, so one left unheld is what this draw will give (Squirtle once
+    // Bulbasaur and Charmander are out).
+    let granted = own.map(|s| uint(&s["grantCount"]) as usize).unwrap_or(0);
+    let next = if ladder.is_empty() {
+        (unheld.len() == 1).then(|| unheld[0])
+    } else {
+        ladder.get(granted).copied()
+    };
+    let next_reward = next.map(|r| DropBenefit {
+        id: r["id"].as_str().unwrap_or_default().to_string(),
+        name: r["name"].as_str().unwrap_or_default().to_string(),
+        image_url: r["thumbnailURL"].as_str().unwrap_or_default().to_string(),
+        distribution_type: None,
+    });
     // A claimed draw holds what came out of it, whether or not the account's
     // earned list (first 100) reached it yet.
     if let Some(p) = progress.as_ref().filter(|p| p.is_claimed) {
@@ -347,14 +381,7 @@ fn group_drop(
         required_subs,
         required_days,
         random_of,
-        // Twitch never repeats a reward from a pool, so one left unheld is what
-        // this draw will give (Squirtle once Bulbasaur and Charmander are out).
-        next_reward: (unheld.len() == 1).then(|| DropBenefit {
-            id: unheld[0]["id"].as_str().unwrap_or_default().to_string(),
-            name: unheld[0]["name"].as_str().unwrap_or_default().to_string(),
-            image_url: unheld[0]["thumbnailURL"].as_str().unwrap_or_default().to_string(),
-            distribution_type: None,
-        }),
+        next_reward,
         needs_earlier,
         pool_rewards,
         // Decided once every campaign is read (`mark_containers`).
@@ -1128,6 +1155,55 @@ mod tests {
 
     fn the_iguana(c: &[DropCampaign]) -> TimeBasedDrop {
         c[0].time_based_drops.iter().find(|d| d.id == "g-iguana").cloned().unwrap()
+    }
+
+    #[test]
+    fn a_tier_twitch_holds_past_its_minutes_is_held_back_whatever_its_flag_says() {
+        // Twitch's real answer for Brandon's Golden Iguana (2026-11-19): still
+        // IN_PROGRESS at 953 of its 60 minutes, with hasPreconditionsMet true.
+        let held = json!({ "status": "IN_PROGRESS", "currentMinutesWatched": 953, "grantCount": 0, "hasPreconditionsMet": true });
+        let c = iguana(held);
+        let d = the_iguana(&c);
+        assert!(d.needs_earlier);
+        let p = d.progress.clone().unwrap();
+        assert!(!p.is_claimed && p.drop_instance_id.is_none());
+        assert_eq!(held_back(&c), ["g-iguana"]);
+        // Minutes still coming in are ordinary progress, held back by nothing.
+        let earning = json!({ "status": "IN_PROGRESS", "currentMinutesWatched": 40, "grantCount": 0, "hasPreconditionsMet": true });
+        assert!(!the_iguana(&iguana(earning)).needs_earlier);
+    }
+
+    #[test]
+    fn a_daily_chest_with_one_reward_a_day_names_the_next_one() {
+        // GTAVI's GTA DVD Drops as Twitch answered it on 2026-11-19: 60 min on
+        // each of 6 days, a chest whose pool is the six chains, day 2 in.
+        let chains = ["Purple Chain", "Bronze Chain", "Silver Chain", "Gold Chain", "Diamond Chain", "Miami Chain"];
+        let list = vec![json!({ "id": "gtavi", "name": "GTAVI Launch Celebration", "brand": "Rockstar Games",
+                                "startsAt": "2026-09-20T11:00:00Z", "endsAt": "2026-10-01T07:59:59Z", "game": null })];
+        let chest = |granted: u32| {
+            json!({
+                "c0": { "id": "gtavi", "imageURL": "https://art/gtavi.png", "rewardGroups": [
+                    { "id": "g-dvd", "name": "GTA DVD Drops",
+                      "progressCriteria": { "requirementType": "WATCH", "requirements": { "minutesWatched": 60, "subs": null },
+                                            "repeatableConfig": { "repeatableTimes": 6 } },
+                      "self": { "status": "IN_PROGRESS", "currentMinutesWatched": 60, "grantCount": granted, "hasPreconditionsMet": true },
+                      "rewards": [ { "id": "chest", "name": "GTA DVD Chest",
+                                     "thumbnailURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/default.png",
+                                     "pool": pool(&chains) } ] }
+                ] },
+                "currentUser": { "id": "u1", "inventory": { "viewerRewardDropCampaignsInProgress": [] } }
+            })
+        };
+        let next = |granted: u32| {
+            build(&list, &chest(granted), &mut HashMap::new(), now())[0].time_based_drops[0].next_reward.clone()
+        };
+        let day3 = next(2).expect("the third chain is next");
+        assert_eq!((day3.name.as_str(), day3.image_url.as_str()), ("Silver Chain", "https://art/Silver Chain.png"));
+        assert_eq!(next(0).unwrap().name, "Purple Chain");
+        assert!(next(6).is_none(), "every chain given");
+        // A pool of one over three days (the Poké Ball) is no ladder.
+        let ball = built(json!({ "status": "IN_PROGRESS", "currentMinutesWatched": 20, "grantCount": 1 }), json!([]));
+        assert!(ball[0].time_based_drops[0].next_reward.is_none());
     }
 
     #[test]

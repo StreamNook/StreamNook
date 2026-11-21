@@ -72,6 +72,27 @@ pub fn to_watch(minutes: i32) -> String {
     }
 }
 
+/// What a reward still needs watched, as its status. One counted over
+/// several days takes only a day's share a day (GTAVI's chest: 60 min on each
+/// of 6 days), so it says today's minutes, or "Done for today" once they are
+/// in, never the whole remainder ("4h to watch"). Anything else says `left`.
+pub fn watch_status(drop: &TimeBasedDrop, left: i32) -> String {
+    let days = drop.required_days;
+    if days <= 1 || drop.required_minutes_watched <= 0 {
+        return to_watch(left);
+    }
+    let per_day = (drop.required_minutes_watched as f64 / days as f64).round() as i32;
+    let today = drop
+        .progress
+        .as_ref()
+        .and_then(|p| p.twitch_progress.as_ref())
+        .map_or(0, |t| t.minutes_today as i32);
+    match per_day - today {
+        m if m <= 0 => "Done for today".to_string(),
+        m => to_watch(m.min(left.max(0))),
+    }
+}
+
 /// "in 23h", "in 40m", "soon"; empty with no time.
 pub fn resets_in(at_ms: Option<i64>, now_ms: i64) -> String {
     let Some(at) = at_ms else { return String::new() };
@@ -206,6 +227,20 @@ mod tests {
         assert_eq!(to_watch(36), "36m to watch");
         assert_eq!(to_watch(516), "8h 36m to watch");
         assert_eq!(to_watch(120), "2h to watch");
+    }
+
+    #[test]
+    fn a_reward_counted_over_days_says_todays_minutes() {
+        // GTAVI's chest, 60 min on each of 6 days: 4h are left in all, but
+        // Twitch takes only today's share, so it said "4h to watch".
+        let chest = drop(360, 0, 6);
+        assert_eq!(watch_status(&chest, 240), "1h to watch");
+        let t = TwitchProgress { minutes_today: 20, days_done: 2, ..twitch() };
+        assert_eq!(watch_status(&with_twitch(chest.clone(), t.clone(), false), 220), "40m to watch");
+        let done = TwitchProgress { minutes_today: 60, ..t };
+        assert_eq!(watch_status(&with_twitch(chest, done, false), 240), "Done for today");
+        // One day's reward says what is left of it.
+        assert_eq!(watch_status(&drop(240, 0, 0), 90), "1h 30m to watch");
     }
 
     #[test]
