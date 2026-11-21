@@ -56,6 +56,7 @@ import {
 import { roomName, roomProvider, useMentionsStore } from '../mentions/mentionInbox';
 import { MentionContextCard } from '../mentions/MentionContextCard';
 import { PhonePins, usePhonePins } from '../chat/PhonePins';
+import { watchPinSurface } from '../chat/pinSurfaceRules';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { usePinsOpen } from '../watch/pinsOpen';
 import { HypeStackCard } from '../../components/chat/HypeStackCard';
@@ -530,6 +531,7 @@ export const WatchScreen: React.FC = () => {
   const replayShown = useVodReplayStore((s) => s.active && s.showing === 'replay');
   const verticalLower = tall && verticalChat === 'lower';
   const verticalGrown = tall && verticalChat === 'expanded';
+  const verticalCleared = tall && verticalChat === 'cleared';
   // Read at a touch, so a gesture decides from the layout it began in.
   const tallRef = useRef(tall);
   useLayoutEffect(() => {
@@ -1029,16 +1031,17 @@ export const WatchScreen: React.FC = () => {
     phone: true,
     provider: stackRoom ? roomProvider(stackRoom) : null,
     channel: stackRoom ? roomName(stackRoom) : null,
-    stripsOnly: verticalLower,
+    stripsOnly: verticalLower || verticalCleared,
     channelPinOpened: pins.open,
     onChannelPinOpen: pins.setOpen,
-    only: chatOverlay ? PINS_ONLY : undefined,
+    // Cleared, the pins alone stay, as strips over the video (the iPhone does the same).
+    only: chatOverlay || verticalCleared ? PINS_ONLY : undefined,
   });
   // The poll and prediction cards in the lower third: one-line strips, and a
   // tap grows the chat with that card open.
   const stackControl = useMemo(
-    () => foldedStack(topStack.control, verticalLower, () => moveVerticalChat('expanded')),
-    [topStack.control, verticalLower, moveVerticalChat],
+    () => foldedStack(topStack.control, verticalLower || verticalCleared, () => moveVerticalChat('expanded')),
+    [topStack.control, verticalLower, verticalCleared, moveVerticalChat],
   );
   // On every entry to the tall layout the chat starts as it was last left (the
   // saved choice, read again); leaving it (a turn, the mini box, PiP, another
@@ -1887,18 +1890,31 @@ export const WatchScreen: React.FC = () => {
   // The player's chat out of sight (the mini box, PiP, landscape with chat away): its composer
   // gives up the keyboard (keys would go into a composer nobody can see, over the tabs or the
   // video), and its menus stop taking taps meant for what is on screen (the column's mark below).
-  const chatOutOfSight = mini || chatClass === 'hidden';
+  // With no stream the layer draws nothing though these hooks still run, so it is out of sight too.
   // Mentions pinned over the chat on screen (SN-284): Rust's list for the
   // `phone-watch` surface, whose mode follows the layout (a rotation or a fold
   // changes the mode, never the id). Over the video only the pins' own card
-  // is drawn, in the dark ink; the lower third shows strips only.
+  // is drawn, in the dark ink; the lower third and the cleared chat show
+  // strips only, and a tap on one grows the chat.
+  const pinSurface = watchPinSurface({
+    show,
+    mini,
+    pip,
+    chatClass,
+    chatOverlay,
+    verticalLower,
+    verticalGrown,
+    verticalCleared,
+    sideBySide,
+  });
+  const chatOutOfSight = pinSurface.chatOutOfSight;
   const mentionPins = usePhonePins({
     surfaceId: 'phone-watch',
     room: activeChatRoom ?? null,
-    mode: chatOverlay ? 'over-video' : verticalLower || verticalGrown ? 'vertical' : sideBySide ? 'landscape' : 'stacked',
-    chatOutOfSight,
-    stripsOnly: verticalLower,
-    overVideo: chatOverlay || verticalLower,
+    mode: pinSurface.mode,
+    chatOutOfSight: pinSurface.pinsOutOfSight,
+    stripsOnly: pinSurface.stripsOnly,
+    overVideo: pinSurface.overVideo,
   });
   useEffect(() => {
     if (!chatOutOfSight || !chatColumnEl) return;
@@ -2396,24 +2412,30 @@ export const WatchScreen: React.FC = () => {
                     entry={mentionCard}
                     stack={stackControl.mention_context}
                     measure={topStack.measure}
+                    // Opening it in the lower third would grow the chat with no tap.
+                    autoOpen={!verticalLower}
                   />
                 )}
                 {/* Last: the pinned mentions never move the cards above them. A tap opens the
                     mention in this chat (the pane on screen takes the jump); in the lower
-                    third it grows the chat first. */}
-                <PhonePins
-                  key={activeChatRoom ?? ''}
-                  pins={mentionPins.pins}
-                  shown={mentionPins.shown}
-                  reportVisible={mentionPins.reportVisible}
-                  inboxSurface="watch"
-                  overVideo={chatOverlay || verticalLower}
-                  stack={stackControl.mention_pins}
-                  measure={topStack.measure}
-                  onBeforeOpen={() => {
-                    if (verticalLower) moveVerticalChat('expanded');
-                  }}
-                />
+                    third it grows the chat first. Cleared, the column is not drawn: the
+                    pins are drawn over the video below instead. */}
+                {!verticalCleared && (
+                  <PhonePins
+                    key={activeChatRoom ?? ''}
+                    pins={mentionPins.pins}
+                    shown={mentionPins.shown}
+                    reportVisible={mentionPins.reportVisible}
+                    reportForm={mentionPins.reportForm}
+                    inboxSurface="watch"
+                    overVideo={chatOverlay || verticalLower}
+                    stack={stackControl.mention_pins}
+                    measure={topStack.measure}
+                    onBeforeOpen={() => {
+                      if (verticalLower) moveVerticalChat('expanded');
+                    }}
+                  />
+                )}
               </ChatOverlayStack>
             }
           />
@@ -2453,6 +2475,29 @@ export const WatchScreen: React.FC = () => {
             composer's 10 px foot over the gesture bar, its 40 px row), its
             ink on the row's 10 px gutter. Outside the chat, so it stays while
             chat is cleared, carrying the count of what arrived since. */}
+        {/* The cleared tall chat keeps the mentions pinned for you (SN-284): strips over the
+            video, above the chat button, wearing the dark ink. A tap grows the chat and opens
+            the mention. The column itself is not drawn while cleared. */}
+        {pinSurface.clearedOverVideo && mentionPins.pins.length > 0 && (
+          <div
+            data-cleared-pins=""
+            className="pointer-events-none absolute left-0 right-0 z-40 flex flex-col px-2.5 [&>*]:pointer-events-auto"
+            style={{ bottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 56px)' }}
+          >
+            <PhonePins
+              key={activeChatRoom ?? ''}
+              pins={mentionPins.pins}
+              shown={mentionPins.shown}
+              reportVisible={mentionPins.reportVisible}
+              reportForm={mentionPins.reportForm}
+              inboxSurface="watch"
+              overVideo
+              stack={stackControl.mention_pins}
+              measure={topStack.measure}
+              onBeforeOpen={() => moveVerticalChat('expanded')}
+            />
+          </div>
+        )}
         {tall && (
           <div
             className="pointer-events-none absolute right-[10px] z-40"

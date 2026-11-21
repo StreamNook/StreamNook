@@ -4,7 +4,7 @@
 // its answer and draws the block on `chrome-glaze`. Over the video (landscape
 // overlay, the tall layout's lower third) it wears the over-video ink.
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MentionPinsBlock, type PinsForm } from '../../components/mentions/MentionPins';
 import { pinsFormOf, pinsMeasureForm } from '../../components/mentions/pinsForm';
 import { StackCard } from '../../components/chat/ChatOverlayStack';
@@ -57,6 +57,9 @@ export function usePhonePins(input: PhonePinsInput) {
     const r = roomRef(roomProvider(input.room), roomName(input.room));
     return r ? [r] : [];
   }, [input.room]);
+  // The form the pins card is drawn in, reported by the card itself: an arrival keeps its
+  // card for a pin that is only a count line.
+  const [pinsForm, reportForm] = useState('');
   const spec = useMemo(
     () => ({
       id: input.surfaceId,
@@ -67,12 +70,13 @@ export function usePhonePins(input: PhonePinsInput) {
       strips_only: input.stripsOnly ?? false,
       over_video: input.overVideo ?? false,
       opens: PHONE_OPENS,
+      pins_form: pinsForm,
     }),
-    [input.surfaceId, rooms, input.chatOutOfSight, shown, input.mode, input.stripsOnly, input.overVideo],
+    [input.surfaceId, rooms, input.chatOutOfSight, shown, input.mode, input.stripsOnly, input.overVideo, pinsForm],
   );
   const { reportVisible } = usePinSurface(spec);
   const answer = useMentionPins(input.surfaceId);
-  return { shown, reportVisible, ...answer };
+  return { shown, reportVisible, reportForm, ...answer };
 }
 
 /** A pin from another chat opens the Mentions sheet at that entry. */
@@ -94,10 +98,13 @@ export function PhonePins({
   onMeasure,
   stack,
   measure,
+  reportForm,
 }: {
   pins: readonly MentionPin[];
   shown: boolean;
   reportVisible: (ids: string[]) => void;
+  /** Tells the surface how the card is drawn (Rust's form), '' when it draws nothing. */
+  reportForm?: (form: string) => void;
   form?: PinsForm;
   height?: number;
   moreCards?: number;
@@ -114,6 +121,11 @@ export function PhonePins({
   measure?: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
 }) {
   useCardPresence(stack, stack && pins.length > 0 ? 'pins' : null);
+  const drawnForm = stack ? (pins.length > 0 && stack.placed && stack.form !== 'folded' ? (stack.form ?? '') : '') : form;
+  useEffect(() => {
+    reportForm?.(drawnForm);
+    return () => reportForm?.('');
+  }, [reportForm, drawnForm]);
   const reportMeasure = useCallback(
     (m: { form: PinsForm; height: number }) => {
       onMeasure?.(m);

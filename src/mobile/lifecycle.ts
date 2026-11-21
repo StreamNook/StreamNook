@@ -104,6 +104,10 @@ function sendInteractive(): void {
     .catch((err) => {
       interactiveInFlight = false;
       Logger.debug('[Lifecycle] set_app_interactive failed:', err);
+      // The wanted value moved while this one was in flight: that one is sent now
+      // (the same value waits for the next event or input, so a refusing core is
+      // never asked in a loop).
+      if (wantedInteractive !== interactive) sendInteractive();
     });
 }
 function reportInteractive(override?: boolean): void {

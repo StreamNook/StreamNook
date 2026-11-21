@@ -370,11 +370,14 @@ export const InboxPanel: React.FC<{
     };
   }, []);
 
-  const loadMore = useCallback(() => {
-    if (!view?.has_more || loadingMore || view.cursor == null) return;
+  // Answers whether the page added rows (false: it failed or held nothing new), which the
+  // pinned-mention search reads so it never waits on a list that will not change.
+  const loadMore = useCallback((): Promise<boolean> => {
+    if (!view?.has_more || view.cursor == null) return Promise.resolve(false);
+    if (loadingMore) return Promise.resolve(true);
     setLoadingMore(true);
     const at = filter;
-    void getInboxView(at, view.cursor, PAGE_SIZE)
+    return getInboxView(at, view.cursor, PAGE_SIZE)
       .then((page) => {
         setView((cur) => {
           if (!cur || at !== filter) return cur;
@@ -382,8 +385,12 @@ export const InboxPanel: React.FC<{
           loaded.current = next.rows.length;
           return next;
         });
+        return page.rows.length > 0;
       })
-      .catch((err) => Logger.warn('[Inbox] older page failed:', err))
+      .catch((err) => {
+        Logger.warn('[Inbox] older page failed:', err);
+        return false;
+      })
       .finally(() => setLoadingMore(false));
   }, [view, loadingMore, filter]);
 

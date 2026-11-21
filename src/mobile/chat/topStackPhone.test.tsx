@@ -27,6 +27,7 @@ vi.mock('../../utils/platform', () => ({
 }));
 
 import { PhonePins } from './PhonePins';
+import { MentionContextCard } from '../mentions/MentionContextCard';
 import { requestMentionFocus } from '../../stores/mentionFocusStore';
 import * as focusStore from '../../stores/mentionFocusStore';
 import { useMentionsStore } from '../mentions/mentionInbox';
@@ -142,6 +143,46 @@ describe('the opener route on the phone', () => {
   });
 });
 
+describe('the mention context card in the lower third', () => {
+  const entry = pin(9).entry;
+  const open = (autoOpen: boolean, onToggle: () => void) =>
+    act(() => root.render(<MentionContextCard entry={entry} stack={control({ form: 'strip', onToggle })} autoOpen={autoOpen} />));
+
+  it('opens once as it appears, except where opening would grow the chat by itself', () => {
+    const onToggle = vi.fn();
+    open(false, onToggle);
+    expect(onToggle).not.toHaveBeenCalled();
+    // Leaving the lower third (the chat grown by the viewer) lets it open, once.
+    open(true, onToggle);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    open(true, onToggle);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the cleared tall chat keeps its pins over the video', () => {
+  it('a tap on a pin grows the chat first', () => {
+    const grow = vi.fn();
+    const other = pin(5, { channel_mark: { platform: 'twitch', channel: 'other' } as MentionPin['channel_mark'] });
+    act(() =>
+      root.render(
+        <PhonePins pins={[other]} shown reportVisible={() => {}} inboxSurface="watch" overVideo onBeforeOpen={grow} stack={control()} />,
+      ),
+    );
+    expect(host.querySelector('[data-mention-pins]')?.className).toContain('sn-over-video');
+    press(host.querySelector('[data-pin-id] [role="button"]'));
+    expect(grow).toHaveBeenCalledTimes(1);
+  });
+
+  it('the screen draws them outside the hidden column and asks the pins alone as strips', () => {
+    const watch = src('src/mobile/screens/WatchScreen.tsx');
+    expect(watch).toContain('only: chatOverlay || verticalCleared ? PINS_ONLY : undefined');
+    expect(watch).toContain('{pinSurface.clearedOverVideo && mentionPins.pins.length > 0 && (');
+    expect(watch).toContain('{!verticalCleared && (');
+    expect(watch).toContain("onBeforeOpen={() => moveVerticalChat('expanded')}");
+  });
+});
+
 describe('the lower third is strips only', () => {
   const kinds: StackKind[] = ['hype', 'prediction', 'poll', 'drop', 'channel_pin', 'mention_context', 'mention_pins'];
   const cards = Object.fromEntries(
@@ -179,7 +220,7 @@ describe('the phone surfaces ask the one stack', () => {
 
   it('the watch screen lays every card out through Rust, the landscape column asks for the pins alone', () => {
     expect(watch).toContain("surface: 'phone-watch'");
-    expect(watch).toMatch(/only: chatOverlay \? PINS_ONLY : undefined/);
+    expect(watch).toMatch(/only: chatOverlay \|\| verticalCleared \? PINS_ONLY : undefined/);
     expect(watch).toContain("const PINS_ONLY: readonly StackKind[] = ['mention_pins']");
     for (const kind of ['hype', 'prediction', 'poll', 'channel_pin', 'mention_context', 'mention_pins']) {
       expect(watch).toContain(`stack={stackControl.${kind}}`);

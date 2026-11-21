@@ -134,6 +134,23 @@ describe('pin surface registry', () => {
     expect(calls[0].surfaces[0].shown).toBe(false);
   });
 
+  it('sends the same page with a higher sequence after off then on, so Rust applies it as the same document', () => {
+    // Rust forgets the page when Pin mentions goes off but keeps no retired token for it:
+    // the document's one page id must come back unchanged and ahead of every earlier call.
+    const { reg, calls, tick } = setup();
+    reg.setEnabled(true);
+    reg.register('t1', spec('main-chat'));
+    tick();
+    const before = calls.at(-1)!;
+    reg.setEnabled(false);
+    reg.setEnabled(true);
+    const after = calls.at(-1)!;
+    expect(after).not.toBe(before);
+    expect(after.page).toBe(before.page);
+    expect(after.seq).toBeGreaterThan(before.seq);
+    expect(after.surfaces.map((s) => s.id)).toEqual(['main-chat']);
+  });
+
   it('logs a failed send without throwing', async () => {
     const send = vi.fn(() => Promise.reject(new Error('refused')));
     const reg = createPinSurfaceRegistry({ page: 'p', send });
@@ -150,6 +167,12 @@ describe('arrivalPinnedOnScreen', () => {
   ];
   it('skips the card for a mention pinned on a surface that is in front', () => {
     expect(arrivalPinnedOnScreen('phone-watch', surfaces)).toBe(true);
+  });
+  it('keeps the card for a pin the surface shows only as its count line', () => {
+    const counted = [{ id: 'phone-watch', shown: true, pins_form: 'count_line' }];
+    expect(arrivalPinnedOnScreen('phone-watch', counted)).toBe(false);
+    expect(arrivalPinnedOnScreen('phone-watch', [{ id: 'phone-watch', shown: true, pins_form: 'floor' }])).toBe(true);
+    expect(arrivalPinnedOnScreen('phone-watch', [{ id: 'phone-watch', shown: true, pins_form: 'full' }])).toBe(true);
   });
   it('shows the card when the pin surface is not in front, unknown, or there is none', () => {
     expect(arrivalPinnedOnScreen('phone-chats', surfaces)).toBe(false);

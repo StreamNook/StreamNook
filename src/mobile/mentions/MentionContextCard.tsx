@@ -15,7 +15,10 @@ export const MentionContextCard: React.FC<{
   /** The card's slot in the stack; absent, it draws as the standalone card. */
   stack?: StackCardControl;
   measure?: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
-}> = ({ entry, stack, measure }) => {
+  /** Whether the card opens once as it appears. False where opening it would move
+   *  the chat by itself (the lower third: a toggle there grows the chat). */
+  autoOpen?: boolean;
+}> = ({ entry, stack, measure, autoOpen = true }) => {
   useCardPresence(stack, stack ? entry.id : null);
   // The message the viewer just opened is what they came for: the card opens
   // once as it appears (a fold after that is theirs).
@@ -24,10 +27,10 @@ export const MentionContextCard: React.FC<{
   const isOpen = stack?.open ?? false;
   const toggle = stack?.onToggle;
   React.useEffect(() => {
-    if (!placed || openedFor.current === entry.id) return;
+    if (!autoOpen || !placed || openedFor.current === entry.id) return;
     openedFor.current = entry.id;
     if (!isOpen) toggle?.();
-  }, [placed, isOpen, toggle, entry.id]);
+  }, [autoOpen, placed, isOpen, toggle, entry.id]);
   // Rust hands over the readable color the chat row shows.
   const color = entry.sender_color ?? undefined;
   const when = agoLabel(new Date(entry.at_ms).toISOString()) ?? '';

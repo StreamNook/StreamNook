@@ -38,6 +38,10 @@ export interface PinSurfaceSpec {
   opens: string[];
   /** Every pin id in view now (empty whenever not shown). */
   visible: string[];
+  /** How the pins card is drawn on this surface now (Rust's slot form: `floor`,
+   *  `full`, `count_line`); unset until a card reports it. A phone surface that
+   *  shows only the count line draws no pin, so an arrival still gets its card. */
+  pins_form?: string;
 }
 
 export interface PinSurfaceOut extends PinSurfaceSpec {
@@ -63,12 +67,13 @@ export interface PinSurfaceRegistryDeps {
 /** Whether a mention that pinned on `pinSurface` is already drawn: that
  *  surface is one of the shown surfaces of this window. Rust sets
  *  `pin_surface` on the arrival at filing, so the arrival card stays away from
- *  a mention the viewer is looking at as a pin. */
+ *  a mention the viewer is looking at as a pin. A surface that shows only the
+ *  count line (too short for the floor) draws no pin: its arrival keeps the card. */
 export function arrivalPinnedOnScreen(
   pinSurface: string | null | undefined,
-  surfaces: ReadonlyArray<{ id: string; shown: boolean }>,
+  surfaces: ReadonlyArray<{ id: string; shown: boolean; pins_form?: string }>,
 ): boolean {
-  return !!pinSurface && surfaces.some((s) => s.id === pinSurface && s.shown);
+  return !!pinSurface && surfaces.some((s) => s.id === pinSurface && s.shown && s.pins_form !== 'count_line');
 }
 
 /** The most visible ids one surface reports (Rust truncates at the same size). */

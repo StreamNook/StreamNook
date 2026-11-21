@@ -33,6 +33,7 @@ import { formatViewerCount } from '../../utils/streamStats';
 import { tabIsStream } from '../watch/closeVideoRule';
 import { usePageState } from '../ui/usePageState';
 import { PhonePins, usePhonePins } from '../chat/PhonePins';
+import { chatsChatOutOfSight } from '../chat/pinSurfaceRules';
 import { watchLayerUp } from '../ui/coveredSurface';
 import { MentionContextCard } from '../mentions/MentionContextCard';
 import { useMentionsStore } from '../mentions/mentionInbox';
@@ -134,7 +135,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
     surfaceId: 'phone-chats',
     room: activeChannel ?? null,
     mode: '',
-    chatOutOfSight: !shown || layerUp || idle,
+    chatOutOfSight: chatsChatOutOfSight({ shown, layerUp, idle }),
   });
   const mentionCard = useMentionsStore((s) => s.contextCard);
   const showMentionCard = shown && !!mentionCard && mentionCard.room === activeChannel;
@@ -443,6 +444,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
                     pins={mentionPins.pins}
                     shown={mentionPins.shown}
                     reportVisible={mentionPins.reportVisible}
+                    reportForm={mentionPins.reportForm}
                     inboxSurface="chats"
                     stack={topStack.control.mention_pins}
                     measure={topStack.measure}
