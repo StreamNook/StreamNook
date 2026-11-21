@@ -72,6 +72,7 @@ import { acceptsComposerEvent, managesHere, mustCloseSurfaces, type PaneEventDet
 import { useManagerInterest, useStreamManager, useTwitchAccount, type PageId } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
 import ConfettiBurst from './ConfettiBurst';
+import { useConfettiClearMs } from '../hooks/useConfettiClearMs';
 import ViewersPanel from './ViewersPanel';
 import ModRoomPane from './modroom/ModRoomPane';
 import { EmotePickerPanel, useSwappingSmiley } from './chat/EmotePickerPanel';
@@ -1395,6 +1396,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden, colors }));
   }, []);
   const hypeConfettiDone = useCallback(() => setHypeConfetti(null), []);
+  const confettiClearAfter = useConfettiClearMs();
   // How tall the floating chat header currently is. It is absolutely positioned
   // OVER this column, and its height moves: a hype train, an expanded pinned
   // message. The combined-chat bar has to sit flush under it to read as one
@@ -5009,6 +5011,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             colors={hypeConfetti.colors}
             perchOn=".sn-composer-row"
             onDone={hypeConfettiDone}
+            clearAfterMs={confettiClearAfter}
           />
         )}
         {/* Chat header - transforms when Hype Train active */}

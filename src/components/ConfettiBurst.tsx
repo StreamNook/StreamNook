@@ -18,7 +18,10 @@ import { useEffect, useRef } from 'react';
  * dragging): pieces within BRUSH_RADIUS of it flick off the way it is moving,
  * and what lay on them slides off too, so a sweep follows its path. A tap, a
  * click or keyboard focus clears the whole control. A control
- * that goes away drops what sat on it.
+ * that goes away drops what sat on it. With `clearAfterMs`, each piece also
+ * fades away on its own that long after it landed (its own clock, so a later
+ * burst never holds an earlier one), and what lay on it eases down onto what
+ * is left.
  *
  * One instance lives as long as anything is falling or resting. Bump `burst`
  * to throw another burst into the same canvas without losing what landed;
@@ -82,6 +85,10 @@ const BRUSH_RADIUS = 16;
 const TAP_SLOP = 6;
 // Remeasure the perches every this many frames while anything moves.
 const REMEASURE_EVERY = 12;
+// Clearing on its own: frames a piece takes to fade out, and how much of the
+// gap a piece left behind the pieces on it close each frame as they sink.
+const FADE_FRAMES = 42;
+const SINK_EASE = 0.18;
 
 const rand = (min: number, max: number) => Math.random() * (max - min) + min;
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
@@ -129,7 +136,8 @@ const NO_GROUND = -1e6;
 
 // fall: in the air. settle: just landed, easing flat. rest: lying on a perch.
 // swept: brushed, waiting `t` frames for the brush to reach it, then airborne.
-type Mode = 'fall' | 'settle' | 'rest' | 'swept';
+// fade: its rest is over (clearing on its own), fading out where it lies.
+type Mode = 'fall' | 'settle' | 'rest' | 'swept' | 'fade';
 
 interface Piece {
   sequin: boolean;
@@ -161,6 +169,10 @@ interface Piece {
   fromRot: number;
   // Frames left growing back from flat to paper after a sweep.
   grow: number;
+  /** When it landed (performance.now()), the start of its own clearing clock. */
+  landedAt: number;
+  /** Px it is still drawn above its place after a piece under it faded, easing to 0. */
+  sink: number;
 }
 
 /** The top edge's y (relative to the perch top) at local x, following the
@@ -324,24 +336,34 @@ interface ConfettiBurstProps {
   perchOn?: string;
   /** Fired once nothing is falling or resting any more. */
   onDone?: () => void;
+  /** Landed confetti fades away this long after it landed; null or absent, it
+   *  stays until it is brushed away. */
+  clearAfterMs?: number | null;
 }
 
 interface Engine {
   spawn: (colors: ColorPair[]) => void;
+  /** The clearing delay changed: re-arm the timer for what is resting. */
+  reschedule: () => void;
 }
 
-export default function ConfettiBurst({ golden = false, colors, burst = 0, perchOn, onDone }: ConfettiBurstProps) {
+export default function ConfettiBurst({ golden = false, colors, burst = 0, perchOn, onDone, clearAfterMs = null }: ConfettiBurstProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const onDoneRef = useRef(onDone);
   const goldenRef = useRef(golden);
   const colorsRef = useRef(colors);
+  const clearAfterRef = useRef(clearAfterMs);
   // First, so the burst effect below already reads this render's colors.
   useEffect(() => {
     onDoneRef.current = onDone;
     goldenRef.current = golden;
     colorsRef.current = colors;
   });
+  useEffect(() => {
+    clearAfterRef.current = clearAfterMs;
+    engineRef.current?.reschedule();
+  }, [clearAfterMs]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -375,6 +397,9 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
     let raf = 0;
     let frame = 0;
     let finished = false;
+    // Wakes the loop when the next resting piece is due to fade (clearing on
+    // its own); the loop sleeps while everything rests.
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const observer = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(() => {
@@ -385,8 +410,12 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
       : null;
     observer?.observe(parent);
 
-    // Pieces on a perch that is gone fall off it.
+    // Pieces on a perch that is gone fall off it (one already fading just goes).
     const drop = (p: Piece) => {
+      if (p.mode === 'fade') {
+        p.t = FADE_FRAMES;
+        return;
+      }
       const at = restPosition(p);
       p.x = at.x;
       p.y = at.y;
@@ -464,7 +493,7 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
 
     const restPosition = (p: Piece) => {
       const perch = p.perch!;
-      return { x: perch.left + p.offX, y: perch.top - p.lift, rot: p.restRot + Math.PI / 2 };
+      return { x: perch.left + p.offX, y: perch.top - p.lift - p.sink, rot: p.restRot + Math.PI / 2 };
     };
 
     const restingCount = () => pieces.reduce((n, p) => n + (p.mode === 'rest' || p.mode === 'settle' ? 1 : 0), 0);
@@ -536,10 +565,14 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
       p.fromRot = p.rot;
       p.vx = 0;
       p.vy = 0;
+      p.landedAt = performance.now();
+      p.sink = 0;
       return true;
     };
 
     const isResting = (p: Piece) => p.mode === 'rest' || p.mode === 'settle';
+    // Still lying there and holding up what is on it: resting, or fading out.
+    const holds = (p: Piece) => isResting(p) || p.mode === 'fade';
 
     // Send one resting piece off its perch: it hops toward `dir` after `delay`
     // frames (the brush reaching it).
@@ -555,7 +588,7 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
     // off the same way.
     const restack = (perch: Perch, dir: number) => {
       const g = perch.base.slice();
-      const lying = pieces.filter((p) => p.perch === perch && isResting(p)).sort((a, b) => a.lift - b.lift);
+      const lying = pieces.filter((p) => p.perch === perch && holds(p)).sort((a, b) => a.lift - b.lift);
       for (const p of lying) {
         const cos = Math.cos(p.restRot);
         const tan = Math.tan(p.restRot);
@@ -570,7 +603,8 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
           if (Math.abs(dx) <= halfX + PILE_BIN / 2 && g[b] > NO_GROUND && g[b] >= under - dx * tan - 1.5) held = true;
         }
         if (!held) {
-          launch(p, dir || (Math.random() < 0.5 ? -1 : 1), 0);
+          // A piece already fading finishes where it is.
+          if (p.mode !== 'fade') launch(p, dir || (Math.random() < 0.5 ? -1 : 1), 0);
           continue;
         }
         for (let b = b0; b <= b1; b++) {
@@ -579,6 +613,55 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
         }
       }
       perch.ground = g;
+    };
+
+    // A piece faded away: rebuild the perch's ground from what is left, lowest
+    // first, and let a piece that lay on it ease down onto whatever is under
+    // it now (it keeps its place on screen through `sink`, which then closes),
+    // so nothing jumps or flies off.
+    const settleDown = (perch: Perch) => {
+      const g = perch.base.slice();
+      const lying = pieces.filter((p) => p.perch === perch && holds(p)).sort((a, b) => a.lift - b.lift);
+      for (const p of lying) {
+        const cos = Math.cos(p.restRot);
+        const tan = Math.tan(p.restRot);
+        const vThick = p.sequin ? p.w * 2 : p.restThick / cos;
+        const halfX = p.sequin ? p.w : (p.restLen / 2) * cos;
+        const b0 = Math.max(0, Math.floor((p.offX - halfX) / PILE_BIN));
+        const b1 = Math.min(g.length - 1, Math.floor((p.offX + halfX) / PILE_BIN));
+        let need = NO_GROUND;
+        for (let b = b0; b <= b1; b++) {
+          const dx = (b + 0.5) * PILE_BIN - p.offX;
+          if (Math.abs(dx) > halfX + PILE_BIN / 2 || g[b] <= NO_GROUND) continue;
+          need = Math.max(need, g[b] + dx * tan);
+        }
+        const under = p.lift - vThick / 2;
+        if (need > NO_GROUND && need < under - 0.5) {
+          p.lift -= under - need;
+          p.sink += under - need;
+        }
+        const low = p.lift - vThick / 2;
+        for (let b = b0; b <= b1; b++) {
+          const dx = (b + 0.5) * PILE_BIN - p.offX;
+          if (Math.abs(dx) <= halfX) g[b] = Math.max(g[b], low - dx * tan + vThick);
+        }
+      }
+      perch.ground = g;
+    };
+
+    // Arm the wake-up for the next resting piece due to fade.
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = undefined;
+      const after = clearAfterRef.current;
+      if (after == null) return;
+      let due = Infinity;
+      for (const p of pieces) if (isResting(p)) due = Math.min(due, p.landedAt + after);
+      if (!Number.isFinite(due)) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        wake();
+      }, Math.max(0, due - performance.now()) + 20);
     };
 
     // Clear a whole perch (a tap, a focus): nearest `fromX` first, each piece
@@ -709,10 +792,15 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
     };
 
     const drawPiece = (p: Piece) => {
-      if (p.mode === 'rest' || (p.mode === 'swept' && p.t > 0)) {
+      if (p.mode === 'rest' || p.mode === 'fade' || (p.mode === 'swept' && p.t > 0)) {
         const at = restPosition(p);
+        if (p.mode === 'fade') {
+          const k = Math.min(1, p.t / FADE_FRAMES);
+          ctx.globalAlpha = 1 - k * k * (3 - 2 * k); // smoothstep: soft at both ends
+        }
         if (p.sequin) drawSequin(at.x, at.y, p.w, p.color.back);
         else drawPaper(at.x, at.y, at.rot, p.restThick, p.restLen, p.color.front);
+        ctx.globalAlpha = 1;
         return;
       }
       if (p.mode === 'settle') {
@@ -756,7 +844,15 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
     };
 
     const step = (p: Piece) => {
+      if (p.sink > 0) {
+        p.sink *= 1 - SINK_EASE;
+        if (p.sink < 0.15) p.sink = 0;
+      }
       if (p.mode === 'rest') return;
+      if (p.mode === 'fade') {
+        p.t++;
+        return;
+      }
       if (p.mode === 'settle') {
         if (++p.t >= SETTLE_FRAMES) p.mode = 'rest';
         return;
@@ -816,8 +912,27 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
       raf = 0;
       frame++;
       if (frame % REMEASURE_EVERY === 0) measure();
+      // Clearing on its own: a piece whose rest is over starts to fade.
+      const after = clearAfterRef.current;
+      if (after != null) {
+        const now = performance.now();
+        for (const p of pieces) {
+          if (p.mode === 'rest' && now - p.landedAt >= after) {
+            p.mode = 'fade';
+            p.t = 0;
+          }
+        }
+      }
       for (const p of pieces) step(p);
-      pieces = pieces.filter((p) => p.mode !== 'fall' || p.y < H + 20);
+      const faded = new Set<Perch>();
+      pieces = pieces.filter((p) => {
+        if (p.mode === 'fade' && p.t >= FADE_FRAMES) {
+          if (p.perch) faded.add(p.perch);
+          return false;
+        }
+        return p.mode !== 'fall' || p.y < H + 20;
+      });
+      for (const perch of faded) if (perches.has(perch.el)) settleDown(perch);
       draw();
 
       if (!pieces.length) {
@@ -827,8 +942,10 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
         }
         return;
       }
-      // Everything resting: stop the loop; resizes redraw it.
-      if (pieces.some((p) => p.mode !== 'rest')) raf = requestAnimationFrame(render);
+      // Everything resting: stop the loop; resizes redraw it, and the clearing
+      // timer wakes it when the next piece is due to fade.
+      if (pieces.some((p) => p.mode !== 'rest' || p.sink > 0)) raf = requestAnimationFrame(render);
+      else schedule();
     };
 
     function wake() {
@@ -848,6 +965,7 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
         const base = {
           mode: 'fall' as Mode, t: 0, perch: null, offX: 0, lift: 0, restRot: 0,
           restLen: 0, restThick: 0, fromW: 0, fromH: 0, fromRot: 0, grow: 0,
+          landedAt: 0, sink: 0,
         };
         for (let i = 0; i < CONFETTI_COUNT; i++) {
           const v = initConfettoVelocity([-9, 9], [6, 11]);
@@ -887,11 +1005,15 @@ export default function ConfettiBurst({ golden = false, colors, burst = 0, perch
         }
         wake();
       },
+      reschedule: () => {
+        if (!raf) schedule();
+      },
     };
 
     return () => {
       engineRef.current = null;
       cancelAnimationFrame(raf);
+      clearTimeout(timer);
       observer?.disconnect();
       window.removeEventListener('pointermove', onHover, true);
       window.removeEventListener('pointerup', onRelease, true);

@@ -134,6 +134,7 @@ import {
 } from '../../services/sevenTvPictures';
 import { SoundVolume } from './SoundControls';
 import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
+import { CONFETTI_CLEAR_DEFAULT_S, CONFETTI_CLEAR_MAX_S, CONFETTI_CLEAR_MIN_S } from '../../utils/confettiClear';
 import { useSoundOptions } from '../../hooks/useSoundOptions';
 import { mentionLook, type MentionItalic, type MentionLook, type MentionShape, type MentionWeight } from '../chat/mentionStyle';
 
@@ -633,6 +634,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     pinned_start_collapsed: stored?.pinned_start_collapsed ?? true,
     polls_start_collapsed: stored?.polls_start_collapsed ?? false,
     predictions_start_collapsed: stored?.predictions_start_collapsed ?? false,
+    confetti_auto_clear: stored?.confetti_auto_clear ?? false,
+    confetti_clear_seconds: stored?.confetti_clear_seconds ?? CONFETTI_CLEAR_DEFAULT_S,
     name_color_adjustment: (stored?.name_color_adjustment ?? 'hsl_loop') as 'off' | 'hsl_loop',
     show_badges: stored?.show_badges ?? true,
     badge_scale: stored?.badge_scale ?? 1,
@@ -1254,6 +1257,44 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         </SettingsSection>
       )}
+
+      {/* After Polls & Predictions (and the phone's Chats Tab), in the iPhone page's order. */}
+      <SettingsSection
+        label="Hype Train"
+        description="The bar at the top of chat while a channel's hype train runs, and the confetti when it levels up."
+      >
+        <SettingsRow
+          title="Confetti cleanup"
+          onReset={resetFor(['chat_design.confetti_auto_clear', false])}
+          description="Confetti that lands on the message box fades away a few seconds after it settles. Off, it stays until you brush it away."
+          help="Each piece starts its own clock when it lands, so a new level-up never keeps older confetti around longer. You can still brush, tap or swipe it away before then."
+          control={
+            <Toggle
+              enabled={cd.confetti_auto_clear}
+              onChange={() => setDesign({ confetti_auto_clear: !cd.confetti_auto_clear })}
+            />
+          }
+        >
+          {cd.confetti_auto_clear && (
+            <SubControls>
+              <SubControl
+                title="Delay"
+                onReset={resetFor(['chat_design.confetti_clear_seconds', CONFETTI_CLEAR_DEFAULT_S])}
+                control={
+                  <InlineSlider
+                    value={cd.confetti_clear_seconds ?? CONFETTI_CLEAR_DEFAULT_S}
+                    min={CONFETTI_CLEAR_MIN_S}
+                    max={CONFETTI_CLEAR_MAX_S}
+                    label="Seconds confetti rests before it fades"
+                    format={(v) => `${v}s`}
+                    onChange={(confetti_clear_seconds) => setDesign({ confetti_clear_seconds })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
+      </SettingsSection>
 
       <SettingsSection
         id="settings-section-chat-events"

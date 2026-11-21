@@ -464,6 +464,38 @@
   },
   {
    "page": "chat",
+   "section": "Hype Train",
+   "title": "Confetti cleanup",
+   "paths": [
+    "chat_design.confetti_auto_clear"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Confetti that lands on the message box fades away a few seconds after it settles. Off, it stays until you brush it away.",
+   "aliases": [
+    "confetti",
+    "clear confetti",
+    "hype train",
+    "level up"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Hype Train",
+   "title": "Delay",
+   "paths": [
+    "chat_design.confetti_clear_seconds"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": [
+    "confetti timer",
+    "seconds"
+   ]
+  },
+  {
+   "page": "chat",
    "section": "Combined Chat",
    "title": "Merged feed",
    "paths": [

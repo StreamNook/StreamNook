@@ -351,6 +351,10 @@ export interface ChatDesignSettings {
   // Live predictions open collapsed to their strip. A prediction already closed
   // and waiting for its result starts collapsed either way. Default false.
   predictions_start_collapsed?: boolean;
+  /** Hype train confetti that landed on the message box fades away on its own. Default false: it stays until brushed away. */
+  confetti_auto_clear?: boolean;
+  /** Seconds a landed piece of confetti rests before it fades (3 to 15, default 5). */
+  confetti_clear_seconds?: number;
   /** Sound when a live message mentions you: a built-in tone id or `file:<id>`. Absent or empty: no sound. */
   mention_sound?: string;
   /** Mention sound volume, percent of the sound's own level (0-200, default 100). */

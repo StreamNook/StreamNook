@@ -63,6 +63,7 @@ import { PinnedBanner } from '../watch/PinnedBanner';
 import { usePinsOpen } from '../watch/pinsOpen';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
 import ConfettiBurst from '../../components/ConfettiBurst';
+import { useConfettiClearMs } from '../../hooks/useConfettiClearMs';
 import PollOverlay from '../../components/PollOverlay';
 import PredictionOverlay from '../../components/PredictionOverlay';
 import { ChatOverlayStack } from '../../components/chat/ChatOverlayStack';
@@ -243,6 +244,7 @@ export const WatchScreen: React.FC = () => {
     setHypeConfetti((prev) => ({ burst: (prev?.burst ?? 0) + 1, golden, colors }));
   }, []);
   const hypeConfettiDone = useCallback(() => setHypeConfetti(null), []);
+  const confettiClearAfter = useConfettiClearMs();
   const [pip, setPip] = useState(false);
   // A pin opens or folds per channel: each channel starts as Chat > Pinned
   // Messages > Collapsed says, and a tap holds until the chat switches.
@@ -2276,6 +2278,7 @@ export const WatchScreen: React.FC = () => {
               colors={hypeConfetti.colors}
               perchOn=".sn-m-composer-row"
               onDone={hypeConfettiDone}
+              clearAfterMs={confettiClearAfter}
             />
           )}
           {/* Chat header carries only live, transient signal now: the hype

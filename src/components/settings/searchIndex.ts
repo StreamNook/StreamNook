@@ -600,6 +600,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
+    section: 'Hype Train',
+    title: 'Confetti cleanup',
+    description: 'Hype train confetti that lands on the message box fades away a few seconds after it settles; off, it stays until you brush it away. Clear confetti on its own, auto clear, remove confetti, confetti stays, level up confetti.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Hype Train',
+    title: 'Delay',
+    parent: 'Confetti cleanup',
+    description: 'How many seconds landed confetti rests before it fades, from 3 to 15. Confetti timer, how long confetti stays.'
+  },
+  {
+    tab: 'Chat',
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
     title: 'Redemptions',
@@ -1421,6 +1434,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Polls & Predictions',
     title: 'Polls & Predictions',
     description: 'The live poll and prediction cards at the top of chat: show or hide each, start polls collapsed, and which card sits on top.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Hype Train',
+    title: 'Hype Train',
+    description: 'The hype train bar at the top of chat and its level-up confetti: whether landed confetti clears itself, and how soon.'
   },
   {
     tab: 'Chat',

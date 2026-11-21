@@ -594,6 +594,13 @@ pub struct ChatDesignSettings {
     /// Live predictions open collapsed to their strip (default false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predictions_start_collapsed: Option<bool>,
+    /// Hype train confetti that landed on the message box fades away on its
+    /// own (default false: it stays until it is brushed away).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confetti_auto_clear: Option<bool>,
+    /// Seconds a landed piece of confetti rests before it fades (3 to 15, default 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confetti_clear_seconds: Option<u32>,
     /// Sound played when a live message mentions you: a built-in tone id or
     /// `file:<id>` from the custom sounds. Absent or empty means no sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -855,6 +862,8 @@ impl Default for ChatDesignSettings {
             pinned_start_collapsed: None,
             polls_start_collapsed: None,
             predictions_start_collapsed: None,
+            confetti_auto_clear: None,
+            confetti_clear_seconds: None,
             mention_sound: None,
             mention_sound_volume: None,
             mention_sound_replies: None,
@@ -3304,8 +3313,13 @@ mod backup_persistence_tests {
         design.insert("pinned_start_collapsed".into(), serde_json::json!(true));
         design.insert("polls_start_collapsed".into(), serde_json::json!(false));
         design.insert("predictions_start_collapsed".into(), serde_json::json!(true));
+        assert!(design.get("confetti_auto_clear").is_none(), "absent stays absent");
+        design.insert("confetti_auto_clear".into(), serde_json::json!(false));
+        design.insert("confetti_clear_seconds".into(), serde_json::json!(12));
 
         let parsed: Settings = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed.chat_design.confetti_auto_clear, Some(false));
+        assert_eq!(parsed.chat_design.confetti_clear_seconds, Some(12));
         assert_eq!(parsed.chat_design.name_color_adjustment, "off");
         assert_eq!(parsed.chat_design.activity_font_size, Some(16));
         assert_eq!(parsed.chat_design.username_colon, Some(true));
