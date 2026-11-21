@@ -1,0 +1,856 @@
+[
+  {
+    "name": "seven_cards_on_a_tall_column",
+    "request": {
+      "cards": [
+        "hype",
+        "prediction",
+        "poll",
+        "drop",
+        "channel_pin",
+        "mention_context",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 1000.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "prediction",
+          "open": true,
+          "form": "open",
+          "height": 156.0
+        },
+        {
+          "kind": "poll",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "channel_pin",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_context",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "floor",
+          "height": 64.0
+        }
+      ],
+      "max_height": 400.0,
+      "height": 400.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "seven_cards_on_a_380_px_column",
+    "request": {
+      "cards": [
+        "hype",
+        "prediction",
+        "poll",
+        "drop",
+        "channel_pin",
+        "mention_context",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 380.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "prediction",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "poll",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "channel_pin",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "mention_context",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 88.0
+        }
+      ],
+      "max_height": 152.0,
+      "more": {
+        "count": 5,
+        "kinds": [
+          "prediction",
+          "poll",
+          "drop",
+          "channel_pin",
+          "mention_context"
+        ],
+        "height": 28.0
+      },
+      "height": 152.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "seven_cards_on_a_320_px_column",
+    "request": {
+      "cards": [
+        "hype",
+        "prediction",
+        "poll",
+        "drop",
+        "channel_pin",
+        "mention_context",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 320.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "prediction",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "poll",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "channel_pin",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "mention_context",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "floor",
+          "height": 64.0
+        }
+      ],
+      "max_height": 128.0,
+      "more": {
+        "count": 5,
+        "kinds": [
+          "prediction",
+          "poll",
+          "drop",
+          "channel_pin",
+          "mention_context"
+        ],
+        "height": 28.0
+      },
+      "height": 128.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "seven_cards_with_the_poll_opened_on_a_700_px_column",
+    "request": {
+      "cards": [
+        "hype",
+        "prediction",
+        "poll",
+        "drop",
+        "channel_pin",
+        "mention_context",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": "poll",
+      "folded": [],
+      "chat_height": 700.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "prediction",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "poll",
+          "open": true,
+          "form": "open",
+          "height": 36.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "channel_pin",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_context",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "floor",
+          "height": 64.0
+        }
+      ],
+      "max_height": 280.0,
+      "height": 280.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "votes_poll_first_and_a_drop",
+    "request": {
+      "cards": [
+        "drop",
+        "poll",
+        "prediction"
+      ],
+      "order": "poll-first",
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 700.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "poll",
+          "open": true,
+          "form": "open",
+          "height": 150.0
+        },
+        {
+          "kind": "prediction",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        }
+      ],
+      "max_height": 280.0,
+      "height": 222.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "the_pins_alone_on_a_tall_column",
+    "request": {
+      "cards": [
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 900.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 200.0
+        }
+      ],
+      "max_height": 360.0,
+      "height": 200.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "the_pins_alone_on_a_short_column",
+    "request": {
+      "cards": [
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 140.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 76.0
+        }
+      ],
+      "max_height": 76.0,
+      "height": 76.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "the_pins_floor_with_a_hype_strip_at_380",
+    "request": {
+      "cards": [
+        "hype",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 380.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 116.0
+        }
+      ],
+      "max_height": 152.0,
+      "height": 152.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "the_lower_third_is_strips_only",
+    "request": {
+      "cards": [
+        "hype",
+        "drop",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 600.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": true,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "floor",
+          "height": 64.0
+        }
+      ],
+      "max_height": 240.0,
+      "height": 136.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "the_channel_pin_open_from_its_store",
+    "request": {
+      "cards": [
+        "channel_pin",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 800.0,
+      "channel_pin_opened": true,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "channel_pin",
+          "open": true,
+          "form": "open",
+          "height": 90.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 200.0
+        }
+      ],
+      "max_height": 320.0,
+      "height": 290.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "n_more_cards_folds_the_lowest_ranks",
+    "request": {
+      "cards": [
+        "hype",
+        "poll",
+        "drop",
+        "channel_pin",
+        "mention_context",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 380.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "poll",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "channel_pin",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "mention_context",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 88.0
+        }
+      ],
+      "max_height": 152.0,
+      "more": {
+        "count": 4,
+        "kinds": [
+          "poll",
+          "drop",
+          "channel_pin",
+          "mention_context"
+        ],
+        "height": 28.0
+      },
+      "height": 152.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "merged_count_line_on_a_very_short_column",
+    "request": {
+      "cards": [
+        "hype",
+        "poll",
+        "drop",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 150.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "poll",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "folded",
+          "height": 0.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "count_line",
+          "height": 28.0,
+          "more_cards": 2
+        }
+      ],
+      "max_height": 76.0,
+      "height": 64.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "measured_heights_with_two_row_pins",
+    "request": {
+      "cards": [
+        "poll",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 800.0,
+      "channel_pin_opened": false,
+      "heights": {
+        "mention_pins": {
+          "strip": 96.0,
+          "open": 260.0,
+          "line": 30.0
+        }
+      },
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "poll",
+          "open": true,
+          "form": "open",
+          "height": 150.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 170.0
+        }
+      ],
+      "max_height": 320.0,
+      "height": 320.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "a_kick_chat_names_its_room_key",
+    "request": {
+      "cards": [
+        "poll"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 700.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": "kick",
+      "channel": "SomeSlug"
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "poll",
+          "open": true,
+          "form": "open",
+          "height": 150.0
+        }
+      ],
+      "max_height": 280.0,
+      "height": 150.0,
+      "room_key": "kick:someslug"
+    }
+  },
+  {
+    "name": "no_pins_keeps_the_old_stack",
+    "request": {
+      "cards": [
+        "drop",
+        "poll"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 700.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "poll",
+          "open": true,
+          "form": "open",
+          "height": 150.0
+        },
+        {
+          "kind": "drop",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        }
+      ],
+      "max_height": 280.0,
+      "height": 186.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "an_unknown_height",
+    "request": {
+      "cards": [
+        "poll",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 0.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "poll",
+          "open": true,
+          "form": "open",
+          "height": 150.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "full",
+          "height": 200.0
+        }
+      ],
+      "max_height": 0.0,
+      "height": 350.0,
+      "room_key": ""
+    }
+  }
+]
