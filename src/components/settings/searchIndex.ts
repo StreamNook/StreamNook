@@ -714,14 +714,21 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Mentions & Replies',
     title: 'Pin mentions',
-    description: 'A mention or a reply to you stays pinned at the top of its chat for a while (1 to 60 minutes), in case you were away when it landed. Click a pin to jump to the message; X puts it away. Pinned highlights, keep mentions on top, missed mentions.'
+    description: "A mention, a reply to you, a highlight word or a gift sub stays pinned at the top of the chat you're reading, in case you were away when it landed. Click a pin to jump to it; X puts one away and Clear all puts them all away. A pin's time counts while you're using StreamNook. Pinned highlights, keep mentions on top, missed mentions."
   },
   {
     tab: 'Chat',
     section: 'Mentions & Replies',
     title: 'For',
     parent: 'Pin mentions',
-    description: 'How long a pinned mention stays at the top of its chat: 1, 2, 5, 10, 15, 30 or 60 minutes. Pin duration, how long mentions stay pinned.'
+    description: 'How long a pin counts down while you use StreamNook: 1, 2, 5, 10, 15, 30 or 60 minutes, or until you close it. Pin duration, how long mentions stay pinned, until I close them.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Mentions & Replies',
+    title: 'Most at once',
+    parent: 'Pin mentions',
+    description: 'The most pins at the top of a chat, 1 to 25. When a new one would pass it, the oldest ends. Pin limit, maximum pinned mentions.'
   },
   {
     tab: 'Chat',

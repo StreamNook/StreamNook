@@ -33,8 +33,10 @@ import { sideChatMin } from '../../mobile/watch/sideChat';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { CURRENCY_OPTIONS } from '../../services/currencyService';
 import { EVENT_CATEGORIES, EVENT_TEMPLATE_EXAMPLES, PROVIDER_CATEGORY_LABELS, PROVIDER_EVENT_CATEGORIES } from '../overlay/overlayConfig';
-import type { ChatEventCategory, ChatEventSettings, CommandFilter, MentionPin } from '../../types';
-import { MentionPinRow } from '../mentions/MentionPins';
+import type { ChatEventCategory, ChatEventSettings, CommandFilter } from '../../types';
+import { MentionPinsBlock } from '../mentions/MentionPins';
+import { SAMPLE_PINS } from './pinSamples';
+import { Minus, Plus } from 'phosphor-react';
 import SpellcheckDictionary from './SpellcheckDictionary';
 import IgnoredPhrasesSettings from './IgnoredPhrasesSettings';
 import CustomSoundsSettings from './CustomSoundsSettings';
@@ -78,30 +80,52 @@ const BLEND_PLATFORMS: ProviderId[] = CHAT_PROVIDERS;
 // message. Matches --color-text-secondary in the default theme.
 const REPEAT_DEFAULT_COLOR = '#8b8b8b';
 
-/** How long a mention can stay pinned (SN-284); Rust keeps it within 1-60. */
+/** How long a pin counts down (SN-284), in minutes of using StreamNook. 0 is
+ *  "Until I close them" (a pin with no clock), listed last. Rust keeps 1 to 60. */
 const PIN_MINUTES = [1, 2, 5, 10, 15, 30, 60];
+const PIN_UNTIL_CLOSED = 0;
+/** Most at once (SN-284): Rust keeps 1 to 25; the oldest ends when a new one passes it. */
+const PIN_MAX_MIN = 1;
+const PIN_MAX_MAX = 25;
+const PIN_MAX_DEFAULT = 10;
+const PIN_MINUTES_DEFAULT = 1;
 
-/** The Pin mentions preview: a fixed sample, so it draws with the switch off
- *  and signed out. */
-const SAMPLE_PIN: MentionPin = {
-  entry: {
-    id: 'sample-pin',
-    platform: 'twitch',
-    room: 'sample',
-    channel_login: 'sample',
-    sender_id: '0',
-    sender_login: 'pixelfox',
-    sender_name: 'pixelfox',
-    sender_color: '#1E90FF',
-    text: '@you are you still here? the raid is starting',
-    kind: 'mention',
-    at_ms: 0,
-    read: true,
-    removed: false,
-  },
-  until_ms: 0,
-  run: 1,
-};
+const pinMinutesLabel = (m: number): string =>
+  m === PIN_UNTIL_CLOSED ? 'Until I close them' : m === 1 ? '1 minute' : `${m} minutes`;
+
+/** The Most at once stepper: the number holds its own width, so 9 to 10 never
+ *  moves the buttons. */
+function PinMaxStepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const btn =
+    'rounded p-1 text-textSecondary transition-colors hover:bg-white/[0.06] hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30';
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        className={btn}
+        disabled={value <= PIN_MAX_MIN}
+        onClick={() => onChange(Math.max(PIN_MAX_MIN, value - 1))}
+        aria-label="Fewer pins at once"
+      >
+        <Minus size={13} />
+      </button>
+      <span className="min-w-[2ch] text-center text-[13px] font-medium tabular-nums text-textPrimary" aria-live="polite">
+        {value}
+      </span>
+      <button
+        type="button"
+        className={btn}
+        disabled={value >= PIN_MAX_MAX}
+        onClick={() => onChange(Math.min(PIN_MAX_MAX, value + 1))}
+        aria-label="More pins at once"
+      >
+        <Plus size={13} />
+      </button>
+    </div>
+  );
+}
+
+const noopPin = () => {};
 
 // Rows the user card can show, in the order they appear on the card itself.
 // Everything defaults to on; the toggle stores `false` to hide.
@@ -596,8 +620,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     mention_animation: stored?.mention_animation ?? true,
     mention_hold: stored?.mention_hold ?? false,
     pin_mentions: stored?.pin_mentions ?? false,
-    // What Rust uses: kept within 1 to 60 (mention_inbox::pin_window_ms).
-    pin_mentions_minutes: Math.min(60, Math.max(1, stored?.pin_mentions_minutes ?? 5)),
+    // 0 is "Until I close them" and is kept as is; Rust clamps anything else
+    // to 1 to 60 (mention_inbox::pin_window_ms).
+    pin_mentions_minutes: stored?.pin_mentions_minutes ?? PIN_MINUTES_DEFAULT,
+    pin_mentions_max: Math.min(PIN_MAX_MAX, Math.max(PIN_MAX_MIN, stored?.pin_mentions_max ?? PIN_MAX_DEFAULT)),
     show_timestamps: stored?.show_timestamps ?? false,
     show_timestamp_seconds: stored?.show_timestamp_seconds ?? false,
     timestamp_format: stored?.timestamp_format ?? '12h',
@@ -2352,12 +2378,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         {/* SN-284: every app (Rust decides the pins; each shell draws them). */}
           <SettingsRow
             title="Pin mentions"
-            onReset={resetFor(['chat_design.pin_mentions', false], ['chat_design.pin_mentions_minutes', 5])}
-            description="A mention or a reply to you stays pinned at the top of its chat for a while, in case you were away when it landed."
+            onReset={resetFor(
+              ['chat_design.pin_mentions', false],
+              ['chat_design.pin_mentions_minutes', PIN_MINUTES_DEFAULT],
+              ['chat_design.pin_mentions_max', PIN_MAX_DEFAULT],
+            )}
+            description="A mention, a reply to you, a highlight word or a gift sub stays pinned at the top of the chat you're reading, in case you were away when it landed."
             help={
               IS_MOBILE
-                ? 'Tap a pin to jump to the message. The X puts it away.'
-                : 'Click a pin to jump to the message. The X puts it away in every window.'
+                ? "Tap a pin to jump to it. The X puts one away, and Clear all puts them all away. A pin's time counts while you're using StreamNook."
+                : "Click a pin to jump to it. The X puts one away in every window, and Clear all puts them all away. A pin's time counts while you're using StreamNook."
             }
             control={
               <Toggle
@@ -2372,25 +2402,46 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               <SubControls>
                 <SubControl
                   title="For"
-                  onReset={resetFor(['chat_design.pin_mentions_minutes', 5])}
+                  onReset={resetFor(['chat_design.pin_mentions_minutes', PIN_MINUTES_DEFAULT])}
                   control={
                     <Dropdown<number>
                       value={cd.pin_mentions_minutes}
                       onChange={(v) => void setSettingsFields({ 'chat_design.pin_mentions_minutes': v }).catch(() => {})}
                       ariaLabel="How long a mention stays pinned"
-                      // A value set elsewhere (an imported file) still shows.
-                      options={[...new Set([...PIN_MINUTES, cd.pin_mentions_minutes])]
-                        .sort((a, b) => a - b)
-                        .map((m) => ({ value: m, label: m === 1 ? '1 minute' : `${m} minutes` }))}
+                      // A value set elsewhere (an imported file) still shows;
+                      // "Until I close them" sorts last.
+                      options={[...new Set([...PIN_MINUTES, cd.pin_mentions_minutes, PIN_UNTIL_CLOSED])]
+                        .sort((a, b) => (a === PIN_UNTIL_CLOSED ? 1 : b === PIN_UNTIL_CLOSED ? -1 : a - b))
+                        .map((m) => ({ value: m, label: pinMinutesLabel(m) }))}
+                    />
+                  }
+                />
+                <SubControl
+                  title="Most at once"
+                  onReset={resetFor(['chat_design.pin_mentions_max', PIN_MAX_DEFAULT])}
+                  control={
+                    <PinMaxStepper
+                      value={cd.pin_mentions_max}
+                      onChange={(v) => void setSettingsFields({ 'chat_design.pin_mentions_max': v }).catch(() => {})}
                     />
                   }
                 />
               </SubControls>
             )}
             <div className="pt-3">
-              <SettingPreview caption="a mention pinned over chat">
+              <SettingPreview caption="pinned mentions at the top of chat">
                 <div className="glass-panel flex justify-center rounded-lg px-3 py-3" aria-hidden inert>
-                  <MentionPinRow pin={SAMPLE_PIN} more={1} phone={IS_MOBILE} />
+                  <div className="w-full max-w-sm">
+                    <MentionPinsBlock
+                      pins={SAMPLE_PINS}
+                      form="full"
+                      shown={false}
+                      warm={false}
+                      phone={IS_MOBILE}
+                      onOpenOwn={noopPin}
+                      onOpenOther={noopPin}
+                    />
+                  </div>
                 </div>
               </SettingPreview>
             </div>

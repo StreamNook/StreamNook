@@ -1277,7 +1277,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "A mention or a reply to you stays pinned at the top of its chat for a while, in case you were away when it landed.",
+   "detail": "A mention, a reply to you, a highlight word or a gift sub stays pinned at the top of the chat you're reading, in case you were away when it landed.",
    "aliases": [
     "pinned mentions",
     "keep mentions on top",
@@ -1297,6 +1297,21 @@
    "detail": "",
    "aliases": [
     "pin duration"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Most at once",
+   "paths": [
+    "chat_design.pin_mentions_max"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": [
+    "pin limit",
+    "maximum pinned mentions"
    ]
   },
   {
