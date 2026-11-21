@@ -203,7 +203,10 @@ function ClipEditorInner({
       );
     } catch (e) {
       Logger.error('[ClipEditor] finalize_clip failed:', e);
-      addToast(`Couldn't create the clip: ${String(e).replace(/^Error:\s*/, '').slice(0, 140)}`, 'error');
+      // Rust says Twitch's refusals as whole sentences (copyrighted music, a refused title);
+      // anything else keeps the "Couldn't create the clip" lead.
+      const detail = String(e).replace(/^Error:\s*/, '').slice(0, 160);
+      addToast(/[.!]$/.test(detail) ? detail : `Couldn't create the clip: ${detail}`, 'error');
       setCreating(false);
     }
   };

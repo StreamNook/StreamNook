@@ -851,13 +851,70 @@ async fn finalize_clip_inner(
                 edit_url: format!("https://clips.twitch.tv/{}/edit", slug),
             });
         }
-        last_detail = payload
-            .and_then(|p| p.get("error"))
-            .filter(|e| !e.is_null())
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| last_detail.clone());
+        if let Some(code) = payload.and_then(|p| p.get("error")).and_then(clip_error_code) {
+            let (message, retry) = clip_error_message(&code);
+            if !retry {
+                return Err(anyhow::anyhow!("{message}"));
+            }
+            last_detail = message.to_string();
+        }
     }
-    Err(anyhow::anyhow!("clip never finalized: {}", last_detail))
+    Err(anyhow::anyhow!("{}", last_detail))
+}
+
+/// The code in a `createClipFromRawMedia` error: Twitch sends the code as a string, or an
+/// object carrying it in `code`.
+fn clip_error_code(err: &serde_json::Value) -> Option<String> {
+    match err {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Object(o) => o.get("code").and_then(|c| c.as_str()).map(str::to_string),
+        _ => None,
+    }
+}
+
+/// What a viewer reads for each of Twitch's clip creation error codes (twitch.tv's
+/// `ClipCreationErrorCode`: CATALOG_DETECTED, CONTENT_CHECK_UNAVAILABLE, RAW_MEDIA_NOT_FOUND,
+/// TITLE_FAILED, UNAUTHORIZED, UNKNOWN), and whether trying again can help. A clip that Twitch
+/// refuses for copyrighted music, a refused title or a refused account never succeeds on a retry.
+fn clip_error_message(code: &str) -> (&'static str, bool) {
+    match code {
+        "CATALOG_DETECTED" => (
+            "Twitch won't make this clip because it has copyrighted music in it. Try a moment without music.",
+            false,
+        ),
+        "TITLE_FAILED" => ("Twitch didn't accept that title. Try a different one.", false),
+        "UNAUTHORIZED" => ("Twitch didn't let your account clip this channel.", false),
+        "CONTENT_CHECK_UNAVAILABLE" => ("Twitch's music check isn't answering right now. Try again in a minute.", true),
+        "RAW_MEDIA_NOT_FOUND" => ("The recording for this clip expired. Start the clip again.", true),
+        _ => ("Twitch couldn't make the clip. Try again.", true),
+    }
+}
+
+#[cfg(test)]
+mod clip_error_tests {
+    use super::*;
+
+    /// SN-290: a clip of a stretch with copyrighted music came back CATALOG_DETECTED, was retried
+    /// five times and shown as `clip never finalized: "CATALOG_DETECTED"`.
+    #[test]
+    fn copyrighted_music_is_said_plainly_and_never_retried() {
+        let code = clip_error_code(&serde_json::json!("CATALOG_DETECTED")).unwrap();
+        let (message, retry) = clip_error_message(&code);
+        assert!(!retry);
+        assert!(message.contains("copyrighted music"));
+        assert!(!message.contains("CATALOG"));
+    }
+
+    #[test]
+    fn codes_read_from_a_string_or_an_object_and_only_passing_trouble_retries() {
+        assert_eq!(clip_error_code(&serde_json::json!({ "code": "TITLE_FAILED" })).as_deref(), Some("TITLE_FAILED"));
+        assert_eq!(clip_error_code(&serde_json::json!(null)), None);
+        assert!(!clip_error_message("TITLE_FAILED").1);
+        assert!(!clip_error_message("UNAUTHORIZED").1);
+        assert!(clip_error_message("CONTENT_CHECK_UNAVAILABLE").1);
+        assert!(clip_error_message("RAW_MEDIA_NOT_FOUND").1);
+        assert!(clip_error_message("SOMETHING_NEW").1);
+    }
 }
 
 // Device code commands (kept for backward compatibility)
