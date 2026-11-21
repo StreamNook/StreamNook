@@ -472,3 +472,58 @@ fn a_snapshot_that_no_longer_decodes_costs_the_pin_its_decoration_never_the_inbo
     let build = &build[..build.find("fn store_built").unwrap()];
     assert!(build.contains("text_row(entry)"), "a snapshot that fails to decode falls back to the text row");
 }
+
+#[test]
+fn a_failed_table_or_cheermote_read_waits_out_its_retry_instead_of_starting_again_on_every_rebuild() {
+    let _g = serial();
+    reset_for_test();
+    assert!(begin_table("tbl-room"), "never read: read it");
+    assert!(!begin_table("tbl-room"), "one in flight");
+    {
+        // The read failed: the rebuild that follows asks again at once and is refused.
+        let mut o = owner();
+        o.table_inflight.remove("tbl-room");
+        o.table_book.finish("tbl-room", false, Instant::now());
+    }
+    assert!(!begin_table("tbl-room"), "a failure waits 30 s, it does not loop with the rebuild");
+    assert!(begin_table("other-room"), "another chat is not held back");
+    assert!(begin_cheermotes("tbl-room") && !begin_cheermotes("tbl-room"));
+    {
+        let mut o = owner();
+        o.cheer_inflight.remove("tbl-room");
+        o.cheer_book.finish("tbl-room", false, Instant::now());
+    }
+    assert!(!begin_cheermotes("tbl-room"), "the same for cheermotes");
+    reset_for_test();
+}
+
+#[test]
+fn a_full_table_cap_drops_a_chat_with_no_live_pin_before_one_that_still_has_one() {
+    let set: EmoteSet = serde_json::from_value(json!({ "twitch": [], "bttv": [], "7tv": [], "ffz": [] })).expect("an empty set");
+    let t0 = Instant::now();
+    let mut tables: HashMap<String, Table> = HashMap::new();
+    tables.insert("live-old".into(), Table { lookup: EmoteLookup::build(&set), at: t0 });
+    tables.insert("idle-new".into(), Table { lookup: EmoteLookup::build(&set), at: t0 + Duration::from_secs(5) });
+    let live: HashSet<String> = ["live-old".to_string()].into();
+    assert_eq!(eviction_victim(&tables, &live).as_deref(), Some("idle-new"), "the live chat's table is the last to go");
+    assert_eq!(eviction_victim(&tables, &HashSet::new()).as_deref(), Some("live-old"), "else the oldest");
+}
+
+#[test]
+fn a_row_stored_incomplete_improves_as_late_data_arrives_and_never_replaces_a_complete_one() {
+    let row = |n: u64| PinRow { row: json!({ "n": n }), rev: n };
+    let held = |n: u64, complete: bool| Cached { row: json!({ "n": n }), hash: n, built: true, complete };
+    // The text row (not built) gives way to any built row.
+    let text = Cached { row: json!({}), hash: 0, built: false, complete: false };
+    assert_eq!(merged(Some(&text), row(1), false).1, true);
+    // An incomplete built row is replaced by a different one (more data landed)...
+    let (next, changed) = merged(Some(&held(1, false)), row(2), false);
+    assert!(changed && next.is_some_and(|c| c.hash == 2));
+    // ...and by the complete one.
+    let (next, changed) = merged(Some(&held(2, false)), row(3), true);
+    assert!(changed && next.is_some_and(|c| c.hash == 3 && c.complete));
+    // The same row again changes nothing; a complete row is never replaced by an incomplete one.
+    assert!(!merged(Some(&held(3, true)), row(3), false).1);
+    let (next, changed) = merged(Some(&held(3, true)), row(4), false);
+    assert!(next.is_none() && !changed);
+}

@@ -280,12 +280,14 @@ impl PinState {
         had
     }
 
-    /// Pin mentions turned off: every surface, home and clock goes.
+    /// Pin mentions turned off: every surface, home and clock goes. A page is
+    /// NOT retired here: the shells reuse one page id for the whole life of the
+    /// document, so retiring it would refuse every report after the switch is
+    /// turned back on. Its next report applies as a fresh page (any sequence).
     pub fn clear_all(&mut self) {
         for w in self.windows.values_mut() {
-            if let Some(p) = w.page.take() {
-                w.retire(&p);
-            }
+            w.page = None;
+            w.seq = 0;
             w.surfaces.clear();
         }
         self.homes.clear();
@@ -861,9 +863,15 @@ pub fn room_has_live_pin(room: &str) -> bool {
 /// Time earned since the last tick is folded into the entries before every
 /// save (`mention_inbox::flush_now`). A no-op unless a clock is running.
 pub fn fold_for_flush() {
-    if pins_on() && TICKING.load(Ordering::SeqCst) && LIVE_PINS.load(Ordering::SeqCst) > 0 {
+    if pins_on() && TICKING.load(Ordering::SeqCst) && LIVE_PINS.load(Ordering::SeqCst) > 0 && with_state(|st| clock_may_be_running(st)) {
         run_pass(mono_now(), true);
     }
+}
+
+/// Whether a pass can credit anything: the app is in front and a tick has
+/// started the credit (the iPhone's main thread folds only then).
+fn clock_may_be_running(st: &PinState) -> bool {
+    st.front && st.prev_tick.is_some()
 }
 
 /// Whether any window reports a pin surface drawn and not covered: the row
@@ -943,8 +951,7 @@ pub fn config_changed(old: &PinCfg, new: &PinCfg, look_changed: bool) {
 /// answers whether it was.
 pub fn set_surfaces(label: &str, page: &str, seq: u64, surfaces: Vec<SurfaceIn>) -> bool {
     if !pins_on() {
-        // Off: nothing is kept (the page's start call is sent only while on).
-        with_state(|st| st.clear_all());
+        // Off: nothing is kept (`config_changed` cleared it when it went off).
         return false;
     }
     let applied = with_state(|st| st.set_surfaces(label, page, seq, surfaces));
@@ -1379,8 +1386,29 @@ mod tests {
         rig.st.clear_all();
         assert!(rig.st.windows["main"].surfaces.is_empty());
         assert!(rig.st.homes.is_empty() && rig.st.clock.is_empty() && rig.st.answer.is_empty());
-        // The old page cannot paint them back.
-        assert!(!rig.st.set_surfaces("main", "page-1", 99, vec![surface("main-chat", &["xqc"], true, &["a"])]));
+        // Turned back on, the same page (the shells reuse one id per document)
+        // reports again, from any sequence, and is applied.
+        assert!(rig.st.set_surfaces("main", "page-1", 99, vec![surface("main-chat", &["xqc"], true, &["a"])]));
+        assert_eq!(rig.st.windows["main"].surfaces.len(), 1);
+        // A page that really retired stays refused after the switch.
+        assert!(rig.st.page_started("main"));
+        rig.st.clear_all();
+        assert!(!rig.st.set_surfaces("main", "page-1", 100, vec![]), "a retired page stays refused across off and on");
+    }
+
+    #[test]
+    fn the_flush_fold_runs_a_pass_only_while_a_clock_can_have_credit() {
+        let mut st = PinState::default();
+        assert!(!clock_may_be_running(&st), "not in front, no tick");
+        st.sync_front(true, T);
+        assert!(!clock_may_be_running(&st), "in front but no tick has started the credit");
+        st.prev_tick = Some(T + 1_000);
+        assert!(clock_may_be_running(&st));
+        st.sync_front(false, T + 2_000);
+        assert!(!clock_may_be_running(&st), "leaving the front stops every clock");
+        let src = include_str!("mention_pins.rs");
+        let fold = &src[src.find("pub fn fold_for_flush").unwrap()..];
+        assert!(fold[..300].contains("clock_may_be_running(st)"));
     }
 
     // ---- homes -------------------------------------------------------------------

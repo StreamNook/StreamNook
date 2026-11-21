@@ -1592,6 +1592,11 @@ pub fn stamp_view(msg: &mut ChatMessage) {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StampOverride {
     pub link_previews: Option<bool>,
+    /// Whether the stamp teaches the seen-colors memory the chatter's name color
+    /// (None = yes, as every live row does). A pinned row is rebuilt every 2 s from
+    /// a snapshot and must teach nothing: a stale snapshot color would overwrite a
+    /// fresher one the live chat noted.
+    pub record_seen: Option<bool>,
 }
 
 /// `stamp` with `ov` applied to the preferences.
@@ -1610,7 +1615,9 @@ pub fn stamp_view_with(msg: &mut ChatMessage, ov: StampOverride) {
     }
     let own = user_override(&msg.provider, &msg.user_id).unwrap_or_default();
     let name_color = shown_color(own.color.as_deref().or(msg.color.as_deref()), &prefs);
-    note_seen(&msg.username, &name_color);
+    if ov.record_seen.unwrap_or(true) {
+        note_seen(&msg.username, &name_color);
+    }
     let channel = msg.channel.trim_start_matches('#').to_lowercase();
     let worn = known_cosmetics(msg);
     let body = spans_with(&msg.segments, &channel, prefs.clone());
@@ -2059,11 +2066,30 @@ mod tests {
         let mut plain = msg();
         stamp_view(&mut plain);
         let mut off = msg();
-        stamp_view_with(&mut off, StampOverride { link_previews: Some(false) });
+        stamp_view_with(&mut off, StampOverride { link_previews: Some(false), ..Default::default() });
         let (a, b) = (plain.metadata.view.unwrap(), off.metadata.view.unwrap());
         assert!(b.previews.is_empty(), "no previews for a pin");
         assert_eq!(a.spans, b.spans, "everything else is the stamp's own");
         assert_eq!(a.name_color, b.name_color);
+    }
+
+    /// A pinned row is rebuilt from a snapshot every 2 s and teaches the seen-colors memory
+    /// nothing (an old snapshot color must not overwrite a fresher one the live chat noted).
+    #[test]
+    fn a_pinned_stamp_teaches_the_seen_colors_nothing() {
+        let msg = |login: &str, color: &str| -> ChatMessage {
+            serde_json::from_value(serde_json::json!({
+                "id": "seen-1", "user_id": "5", "username": login, "display_name": login, "color": color, "badges": [], "timestamp": "",
+                "content": "hi", "provider": "twitch", "channel": "#seen", "tags": {}, "segments": [], "metadata": {}
+            }))
+            .unwrap()
+        };
+        let mut pin = msg("pinseenlogin", "#123456");
+        stamp_view_with(&mut pin, StampOverride { record_seen: Some(false), ..Default::default() });
+        assert_eq!(seen_color("pinseenlogin"), None, "a pin teaches nothing");
+        let mut live = msg("pinseenlogin", "#123456");
+        stamp_view(&mut live);
+        assert!(seen_color("pinseenlogin").is_some(), "a live row still does");
     }
 
     #[test]

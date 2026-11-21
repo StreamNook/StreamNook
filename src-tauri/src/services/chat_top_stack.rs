@@ -262,14 +262,22 @@ pub fn layout(req: &StackRequest) -> StackLayout {
             break;
         }
     }
-    let folded_kinds: Vec<String> = strips.iter().filter(|k| !kept.contains(k)).map(|k| (*k).to_string()).collect();
-    // Under the merged form the open card folds too when it has no room at all.
-    let open_folded = open_kind.is_some_and(|k| others.contains(&k)) && used > cap_v;
+    let mut folded_kinds: Vec<String> = strips.iter().filter(|k| !kept.contains(k)).map(|k| (*k).to_string()).collect();
+    // The "N more cards" strip is part of what the open card has to fit beside (decided
+    // after it, so a column with no pins cannot end up over its share).
+    let mut more_h = if !merged && !folded_kinds.is_empty() { MORE_HEIGHT } else { 0.0 };
+    // The open card folds too when it has no room at all.
+    let open_folded = open_kind.is_some_and(|k| others.contains(&k)) && used + more_h > cap_v;
     let mut all_folded = folded_kinds.clone();
     if open_folded {
         all_folded.extend(open_kind.map(str::to_string));
+        if !merged {
+            // Its room is given back and the "N more cards" strip counts it.
+            used -= open_min;
+            folded_kinds = all_folded.clone();
+            more_h = MORE_HEIGHT;
+        }
     }
-    let more_h = if !merged && !folded_kinds.is_empty() { MORE_HEIGHT } else { 0.0 };
     used += more_h;
 
     // The open card takes what it needs next, the pins the rest up to their natural height.
@@ -468,6 +476,38 @@ mod tests {
                 let pins = form_of(&l, "mention_pins");
                 assert!(matches!(pins.form, Form::Floor | Form::Full | Form::CountLine), "{height}: pins are never folded");
                 assert!(pins.height >= 28.0);
+            }
+        }
+    }
+
+    /// Whatever cards are present, whichever is open, whatever the shell measured, the stack
+    /// never passes its share (pins or not) and the pins are never folded.
+    #[test]
+    fn the_stack_stays_inside_its_share_for_every_set_of_cards_every_open_card_and_every_measure() {
+        let all = ["hype", "prediction", "poll", "drop", "channel_pin", "mention_context", "mention_pins"];
+        for mask in 1u32..(1 << all.len()) {
+            let cards: Vec<&str> = all.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, k)| *k).collect();
+            for height in [60.0, 120.0, 200.0, 250.0, 330.0, 380.0, 460.0, 700.0] {
+                for strip in [0.0, 36.0, 60.0, 90.0] {
+                    for opened in std::iter::once(None).chain(cards.iter().map(|k| Some(*k))) {
+                        let mut r = req(&cards, height);
+                        r.opened = opened.map(str::to_string);
+                        if strip > 0.0 {
+                            for k in &cards {
+                                if *k != "mention_pins" {
+                                    r.heights.insert((*k).to_string(), CardHeights { strip, open: strip + 80.0, line: 0.0 });
+                                }
+                            }
+                        }
+                        let l = layout(&r);
+                        let cap = (height * MAX_SHARE).max(MIN_HEIGHT);
+                        assert!(l.height <= cap, "{cards:?} open {opened:?} strip {strip} at {height}: {} over the {cap} share", l.height);
+                        if cards.contains(&"mention_pins") {
+                            let pins = form_of(&l, "mention_pins");
+                            assert!(matches!(pins.form, Form::Floor | Form::Full | Form::CountLine));
+                        }
+                    }
+                }
             }
         }
     }

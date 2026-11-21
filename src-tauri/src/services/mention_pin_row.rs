@@ -145,6 +145,22 @@ struct Cached {
     hash: u64,
     /// Built from a snapshot; false for the text row.
     built: bool,
+    /// Built with nothing missing (a built row stored after the 10 s may not be).
+    complete: bool,
+}
+
+/// What the cache holds after a build lands: a complete row is never replaced
+/// by an incomplete one, anything else is replaced when its hash differs (so a
+/// row stored incomplete at the 10 s improves as late data arrives). Answers
+/// the entry to store and whether the drawn row changed.
+fn merged(existing: Option<&Cached>, row: PinRow, complete: bool) -> (Option<Cached>, bool) {
+    match existing {
+        Some(c) if c.built && c.complete && !complete => (None, false),
+        Some(c) if c.built && c.hash == row.rev => {
+            (Some(Cached { row: row.row, hash: row.rev, built: true, complete: complete || c.complete }), false)
+        }
+        _ => (Some(Cached { row: row.row, hash: row.rev, built: true, complete }), true),
+    }
 }
 
 impl Cached {
@@ -209,6 +225,13 @@ impl BadgeBook {
     pub fn answered(&self, room: &str) -> bool {
         matches!(self.rooms.get(room), Some(BadgeState::Answered))
     }
+
+    /// The held answer is gone (a table dropped with its chat): ask again when needed.
+    pub fn forget(&mut self, room: &str) {
+        if matches!(self.rooms.get(room), Some(BadgeState::Answered)) {
+            self.rooms.remove(room);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -224,6 +247,10 @@ struct Owner {
     cheers: HashMap<String, Arc<CheermoteSet>>,
     cheer_inflight: HashSet<String>,
     badges: BadgeBook,
+    /// Per chat login, like the badge sets: one read in flight, a failure retried
+    /// after 30 s, 2 min, then 10 min, so a failing fetch never loops with the rebuild.
+    table_book: BadgeBook,
+    cheer_book: BadgeBook,
     badge_queue: VecDeque<String>,
     badge_worker: bool,
     last_refresh: Option<Instant>,
@@ -285,7 +312,7 @@ pub fn cached(entry: &MentionEntry) -> Option<PinRow> {
 
 fn store_fallback(entry: &MentionEntry) -> PinRow {
     let row = text_row(entry);
-    owner().rows.entry(entry.id.clone()).or_insert(Cached { row: row.row.clone(), hash: row.rev, built: false });
+    owner().rows.entry(entry.id.clone()).or_insert(Cached { row: row.row.clone(), hash: row.rev, built: false, complete: false });
     row
 }
 
@@ -326,8 +353,17 @@ pub fn retain_live(runs: &[PinRun]) {
     o.rows.retain(|id, _| live.contains(id.as_str()));
     o.seen.retain(|id, _| live.contains(id.as_str()));
     o.entries.retain(|id, _| live.contains(id.as_str()));
-    o.tables.retain(|login, t| rooms.contains(login) || now.duration_since(t.at) < TABLE_LINGER);
-    o.cheers.retain(|login, _| rooms.contains(login));
+    let dropped: Vec<String> =
+        o.tables.iter().filter(|(login, t)| !rooms.contains(*login) && now.duration_since(t.at) >= TABLE_LINGER).map(|(l, _)| l.clone()).collect();
+    for login in dropped {
+        o.tables.remove(&login);
+        o.table_book.forget(&login);
+    }
+    let gone: Vec<String> = o.cheers.keys().filter(|l| !rooms.contains(*l)).cloned().collect();
+    for login in gone {
+        o.cheers.remove(&login);
+        o.cheer_book.forget(&login);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -369,23 +405,20 @@ async fn build_and_store(entry: &MentionEntry) {
     let late = first.elapsed() >= FALLBACK_AFTER;
     if complete || late {
         // A complete row replaces whatever is there; an incomplete one (after
-        // the 10 s) only a fallback. A built row is never replaced by a worse one.
+        // the 10 s) a fallback or another incomplete row that differs, never a
+        // complete one.
         store_built(entry, row, complete);
     }
 }
 
-fn store_built(entry: &MentionEntry, row: PinRow, replace_built: bool) {
+fn store_built(entry: &MentionEntry, row: PinRow, complete: bool) {
     let changed = {
         let mut o = owner();
-        let existing = o.rows.get(&entry.id).cloned();
-        match existing {
-            Some(c) if c.built && !replace_built => false,
-            Some(c) if c.hash == row.rev && c.built => false,
-            _ => {
-                o.rows.insert(entry.id.clone(), Cached { row: row.row, hash: row.rev, built: true });
-                true
-            }
+        let (next, changed) = merged(o.rows.get(&entry.id), row, complete);
+        if let Some(next) = next {
+            o.rows.insert(entry.id.clone(), next);
         }
+        changed
     };
     if changed {
         crate::services::mention_pins::rows_changed();
@@ -434,7 +467,7 @@ fn build_row(entry: &MentionEntry, snap: Snap, view: bool) -> (PinRow, Needs) {
         crate::services::irc_service::with_size_table(home, || {
             crate::services::chat_row_view::stamp_view_with(
                 &mut msg,
-                crate::services::chat_row_view::StampOverride { link_previews: Some(false) },
+                crate::services::chat_row_view::StampOverride { link_previews: Some(false), record_seen: Some(false) },
             )
         });
     }
@@ -625,8 +658,38 @@ async fn app_emote_service() -> crate::services::emote_service::EmoteService {
     crate::services::emote_service::EmoteService::new()
 }
 
+/// The private table to drop when the cap is reached: the oldest of a chat with
+/// no live pin (kept only for the linger), else the oldest of all.
+fn eviction_victim(tables: &HashMap<String, Table>, live_rooms: &HashSet<String>) -> Option<String> {
+    tables
+        .iter()
+        .min_by_key(|(login, t)| (live_rooms.contains(*login), t.at))
+        .map(|(login, _)| login.clone())
+}
+
+/// Whether to start a private-table read of `login` now: none in flight, and
+/// the chat's record allows it (a failure waits out its 30 s / 2 min / 10 min).
+fn begin_table(login: &str) -> bool {
+    let mut o = owner();
+    if !o.table_book.should_fetch(login, Instant::now()) || !o.table_inflight.insert(login.to_string()) {
+        return false;
+    }
+    o.table_book.start(login);
+    true
+}
+
+/// The same gate for a chat's cheermote set.
+fn begin_cheermotes(login: &str) -> bool {
+    let mut o = owner();
+    if !o.cheer_book.should_fetch(login, Instant::now()) || !o.cheer_inflight.insert(login.to_string()) {
+        return false;
+    }
+    o.cheer_book.start(login);
+    true
+}
+
 fn request_table(login: &str, room_id: &str) {
-    if !owner().table_inflight.insert(login.to_string()) {
+    if !begin_table(login) {
         return;
     }
     let (login, room_id) = (login.to_string(), room_id.to_string());
@@ -635,10 +698,13 @@ fn request_table(login: &str, room_id: &str) {
         {
             let mut o = owner();
             o.table_inflight.remove(&login);
+            o.table_book.finish(&login, table.is_some(), Instant::now());
             if let Some(lookup) = table {
                 if o.tables.len() >= MAX_TABLES {
-                    if let Some(oldest) = o.tables.iter().min_by_key(|(_, t)| t.at).map(|(k, _)| k.clone()) {
-                        o.tables.remove(&oldest);
+                    let live: HashSet<String> = o.entries.values().map(|e| e.channel_login.to_lowercase()).collect();
+                    if let Some(victim) = eviction_victim(&o.tables, &live) {
+                        o.tables.remove(&victim);
+                        o.table_book.forget(&victim);
                     }
                 }
                 o.tables.insert(login.clone(), Table { lookup, at: Instant::now() });
@@ -663,7 +729,7 @@ async fn fetch_table(login: &str, room_id: &str) -> Option<Arc<EmoteLookup>> {
 }
 
 fn request_cheermotes(login: &str, room_id: &str) {
-    if !owner().cheer_inflight.insert(login.to_string()) {
+    if !begin_cheermotes(login) {
         return;
     }
     let (login, room_id) = (login.to_string(), room_id.to_string());
@@ -672,6 +738,7 @@ fn request_cheermotes(login: &str, room_id: &str) {
         {
             let mut o = owner();
             o.cheer_inflight.remove(&login);
+            o.cheer_book.finish(&login, set.is_some(), Instant::now());
             if let Some(set) = set {
                 o.cheers.insert(login.clone(), Arc::new(set));
             }
@@ -755,10 +822,11 @@ pub async fn remote_snapshot(entry: &MentionEntry, raw: &RemoteRaw) -> Option<Bo
     let login = entry.channel_login.to_lowercase();
     let room_id = tag_value(&line, "room-id").unwrap_or_default().to_string();
     let mut channel = crate::services::irc_service::parse_lookup_for(&login).or_else(|| owner().tables.get(&login).map(|t| t.lookup.clone()));
-    if channel.is_none() && !room_id.is_empty() && owner().table_inflight.insert(login.clone()) {
+    if channel.is_none() && !room_id.is_empty() && begin_table(&login) {
         let table = fetch_table(&login, &room_id).await;
         let mut o = owner();
         o.table_inflight.remove(&login);
+        o.table_book.finish(&login, table.is_some(), Instant::now());
         if let Some(lookup) = table {
             o.tables.insert(login.clone(), Table { lookup: lookup.clone(), at: Instant::now() });
             channel = Some(lookup);

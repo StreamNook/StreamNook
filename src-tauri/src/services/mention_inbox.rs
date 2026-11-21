@@ -1807,6 +1807,26 @@ pub(crate) fn with_pin_inbox<R>(f: impl FnOnce(&mut Inbox) -> (R, Change)) -> Op
     with_inbox_level(owner, sources, f)
 }
 
+/// The ids of the non-Twitch entries the held inbox keeps, so a Kick, YouTube
+/// or TikTok deletion frame for any other message costs no inbox lock. None
+/// until an inbox has loaded (a frame then takes the lock, as it always did).
+/// Rewritten under the inbox lock whenever the entries can have changed (a
+/// load, a file, a prune, a removal, a clear); read without it.
+static PROVIDER_IDS: RwLock<Option<HashSet<String>>> = RwLock::new(None);
+
+fn sync_provider_ids(inbox: &Inbox) {
+    let ids: HashSet<String> = inbox.entries.iter().filter(|e| e.platform != "twitch").map(|e| e.id.clone()).collect();
+    if let Ok(mut held) = PROVIDER_IDS.write() {
+        *held = Some(ids);
+    }
+}
+
+/// Whether a deleted message id can be in the inbox: false only when the inbox
+/// is loaded and keeps no non-Twitch entry with that id.
+fn provider_id_may_be_held(id: &str) -> bool {
+    PROVIDER_IDS.read().map(|held| held.as_ref().map(|ids| ids.contains(id)).unwrap_or(true)).unwrap_or(true)
+}
+
 fn with_inbox_level<R>(owner: String, sources: Vec<String>, f: impl FnOnce(&mut Inbox) -> (R, Change)) -> Option<R> {
     let (out, dirty, counts, fresh) = {
         let mut guard = state().lock().ok()?;
@@ -1847,6 +1867,9 @@ fn with_inbox_level<R>(owner: String, sources: Vec<String>, f: impl FnOnce(&mut 
             st.merged.extend(pending);
         }
         let (out, level) = f(&mut st.inbox);
+        if loaded || adopted || matches!(level, Change::Dirty | Change::Full) {
+            sync_provider_ids(&st.inbox);
+        }
         let changed = level == Change::Full;
         match level {
             Change::None => {}
@@ -2381,7 +2404,12 @@ pub fn provider_frame_action(json: &str) -> Option<FrameAction> {
 /// message leaves the inbox and a banned chatter's pins end, as they do on Twitch.
 pub fn on_provider_frame(json: &str) {
     match provider_frame_action(json) {
-        Some(FrameAction::Deleted(id)) => on_message_deleted(&id),
+        // A frame for a message the inbox never held takes no lock.
+        Some(FrameAction::Deleted(id)) => {
+            if provider_id_may_be_held(&id) {
+                on_message_deleted(&id);
+            }
+        }
         Some(FrameAction::Cleared { room, sender_id, sender_login }) => on_clearchat(&room, Some((&sender_id, &sender_login))),
         None => {}
     }
@@ -2680,6 +2708,28 @@ mod tests {
         let publish = include_str!("providers/mod.rs");
         let body = &publish[publish.find("pub async fn publish_frame").unwrap()..];
         assert!(body[..300.min(body.len())].contains("mention_inbox::on_provider_frame(&json)"));
+    }
+
+    #[test]
+    fn a_deletion_frame_for_a_message_the_inbox_never_held_takes_no_inbox_lock() {
+        let mut kick = entry("k1", "kick:alpha", NOW);
+        kick.platform = "kick".into();
+        let twitch = entry("t1", "xqc", NOW);
+        let inbox = inbox_of(vec![kick, twitch]);
+        sync_provider_ids(&inbox);
+        assert!(provider_id_may_be_held("k1"), "a held Kick entry is looked up");
+        assert!(!provider_id_may_be_held("elsewhere"), "any other id never reaches the lock");
+        assert!(!provider_id_may_be_held("t1"), "Twitch acts on its own lines");
+        // Not loaded yet: the frame takes the lock as it always did.
+        *PROVIDER_IDS.write().unwrap() = None;
+        assert!(provider_id_may_be_held("elsewhere"));
+        // Every change to the entries refreshes the set, under the inbox lock.
+        let src = include_str!("mention_inbox.rs");
+        let level = &src[src.find("fn with_inbox_level").unwrap()..];
+        let level = &level[..level.find("fn ensure_flush_task").unwrap()];
+        assert!(level.contains("sync_provider_ids(&st.inbox)"));
+        let frame = &src[src.find("pub fn on_provider_frame").unwrap()..];
+        assert!(frame[..400].contains("provider_id_may_be_held(&id)"));
     }
 
     #[test]
