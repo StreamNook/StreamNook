@@ -1,3 +1,60 @@
+## [8.9.4] - 2026-11-21
+
+### Windows and macOS
+
+#### Features
+- StreamDatabase joins the Special thanks in About.
+
+#### Bug Fixes
+- A clip Twitch refuses because it has copyrighted music in it now says so, instead of showing an error code after a long wait. Reported by ypxle (SN-290).
+- Twitch's own gift and reward notifications arrive again.
+- Autopilot learns where a Pokémon line starts on its own, so it stops chasing evolutions you can't begin yet.
+- Profile atmospheres no longer show a bare strip near the edge of small cards.
+
+### Everywhere
+
+#### Features
+- Hype trains show which kind they are. A Heist Train during GTA VI, a Golden Kappa, Treasure, Mythic, Community or Shared train each wears Twitch's own icon, fills in its own colors and names itself beside the level, as in "Heist Train · Level 3". A record-setting train gets Twitch's trophy.
+- The hype train bar is redesigned: the level, the bits or subs still to go with Twitch's own Cheer gem, a countdown and a livelier fill. The level-up words now finish crossing instead of being cut off, and on phones the bar is shorter.
+- Hype train confetti lands on the message box and its buttons. It brushes off as your pointer passes over it, or with a tap or a swipe on a phone.
+- [Confetti cleanup](streamnook://settings/Chat/Confetti%20cleanup) fades landed confetti away on its own, 3 to 15 seconds after it lands.
+- A Skip button jumps past the part of a VOD Twitch muted: in the "Audio muted by Twitch" badge on desktop, and a "Muted | Skip" pill over the seek bar on phones. Requested by haku (SN-282).
+- [Redemption style](streamnook://settings/Chat/Redemption%20style) picks how channel points messages like Highlight My Message stand out: Gradient, Solid or Edge, with a live preview. Requested by Shaiza (SN-281).
+- [Pin mentions](streamnook://settings/Chat/Pin%20mentions) stacks the mentions, replies, highlight words and gift subs meant for you at the top of the chat you're reading, each drawn just like the message in chat, with its badges, paint and emotes. A pin's time (1 minute by default, or until you close it) only counts while you're using StreamNook, so nothing runs out while you're away, and mentions from your other open chats pin too, marked with their channel. Requested by Raxx (SN-284).
+- The top of chat is one floating stack: the hype train, polls, predictions, the channel's pinned message and your pins share it without pushing chat down, and a running hype train always stays in view. Requested by Raxx (SN-284).
+- The Pokémon evolution strip can be closed with the X on its title, and stays away until the next evolution event.
+- Settings search understands looser wording, so "readability" or "name next to the emote" finds Emote words.
+
+#### Bug Fixes
+- A sub gifted to you lands in your inbox (and on the Island on desktop), and its chat card is highlighted like a mention instead of folding into the gift list.
+- A YouTube link that YouTube shortens in chat opens its whole address, and its preview shows the right video.
+- The GTAVI campaign files under Grand Theft Auto VI with its box art. Its card no longer offers Claim on the Golden Iguana before Twitch hands it out, its daily chest shows the chain it gives next, and a reward counted over several days says today's minutes ("40m to watch", "Done for today") instead of the whole remainder.
+
+### Android and iPhone
+
+#### Features
+- A Picture-in-picture switch in Player settings. Off, leaving the app goes straight to background audio, or pauses. Requested by haku (SN-283).
+- The drops bar over the message box has a chevron that tucks it into a thin progress line, so chat gets its room back. A tap on the line brings it back.
+- Your own accolade wall is gone from the You tab, since nothing there can be equipped. Members still see it on your profile.
+
+#### Bug Fixes
+- After a call, an alarm or another app's sound, the stream comes back at the live edge instead of staying behind until a reload. Reported by twisteeR (SN-287).
+- A Kick chat that went quiet while the phone slept or changed networks reconnects within 30 seconds. Reported by twisteeR (SN-287).
+- Kick's cookie banner takes taps on the sign-in page. Reported by twisteeR (SN-287).
+- Your Twitch Recap fills in soon after you sign in on a phone, instead of a day later.
+- A member's StreamNook badge no longer sits on a black disc on their picture.
+
+### Android
+
+#### Bug Fixes
+- The evolution strip reads on light themes.
+
+### iPhone
+
+#### Features
+- The Pokémon evolution strip on the Badges screen.
+- Emote words: the typed word with each emote, under it, after it or as a chip.
+
 ## [8.9.3] - 2026-11-19
 
 ### Windows and macOS
