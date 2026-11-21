@@ -27,7 +27,10 @@ import { sendToSource, sourceKeyOf, sourceProviderOf } from '../../utils/sendToS
 import { useBlendedChatSource } from '../../hooks/useBlendedChatSource';
 import { initializeBadgeCache } from '../../services/twitchBadges';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
-import HypeTrainBanner from '../HypeTrainBanner';
+import { ChatOverlayStack } from '../chat/ChatOverlayStack';
+import { HypeStackCard } from '../chat/HypeStackCard';
+import { useChatTopStack } from '../chat/chatTopStack';
+import { jumpTarget } from '../chat/stackSpacer';
 import { useBlendedHypeTrains } from './useBlendedHypeTrains';
 import { Logger } from '../../utils/logger';
 import { Tooltip } from '../ui/Tooltip';
@@ -119,6 +122,16 @@ export function BlendedChatPane({
   // A level-up's confetti rains over the whole feed, so the shared banner portals
   // it into this element.
   const [feedEl, setFeedEl] = useState<HTMLElement | null>(null);
+  // The top-of-chat stack floats over the merged feed (SN-284): the hype train
+  // (one strip per train), the mention context card and the pinned mentions in
+  // Rust's one order. The feed keeps its whole height and gets a spacer.
+  const topStack = useChatTopStack(feedEl, { surface: 'blended' });
+  const [stackBottom, setStackBottom] = useState(0);
+  const stackBottomRef = useRef(0);
+  useEffect(() => {
+    stackBottomRef.current = stackBottom;
+  }, [stackBottom]);
+  const trainList = useMemo(() => [...hypeTrains.values()], [hypeTrains]);
 
   // Stable view of the current feed + source map for the row callbacks, so those
   // callbacks keep a fixed identity (they read the ref) and don't defeat the row
@@ -270,9 +283,17 @@ export function BlendedChatPane({
         ) as HTMLElement | null;
         const container = el?.closest('.overflow-y-auto') as HTMLElement | null;
         if (el && container) {
-          const target = el.offsetTop - container.clientHeight / 2 + el.offsetHeight / 2;
+          // Below the floating stack, which covers the feed's top.
           container.scrollTo({
-            top: Math.max(0, Math.min(target, container.scrollHeight - container.clientHeight)),
+            top: jumpTarget({
+              align: 'center',
+              elementTop: el.offsetTop,
+              elementHeight: el.offsetHeight,
+              scrollTop: container.scrollTop,
+              containerHeight: container.clientHeight,
+              scrollHeight: container.scrollHeight,
+              inset: stackBottomRef.current,
+            }),
             behavior: 'smooth',
           });
         }
@@ -587,20 +608,6 @@ export function BlendedChatPane({
 
   return (
     <div ref={paneRef} className={`flex h-full min-h-0 min-w-0 flex-1 flex-col ${transparent ? 'bg-transparent' : 'bg-secondary'}`}>
-      {[...hypeTrains.values()].map((t) => (
-        <div
-          key={t.broadcaster_user_login}
-          className="flex-shrink-0 border-b border-borderSubtle px-3 pb-2"
-        >
-          <div className="flex items-center gap-1.5 pt-1.5">
-            <ProviderLogo provider="twitch" size={12} className="flex-shrink-0" />
-            <span className="truncate text-[11px] font-semibold text-textPrimary">
-              {t.broadcaster_user_name || t.broadcaster_user_login}
-            </span>
-          </div>
-          <HypeTrainBanner train={t} confettiTarget={feedEl} />
-        </div>
-      ))}
       <div ref={setFeedEl} className="relative min-h-0 flex-1 overflow-hidden">
         <ChatMessageList
           messages={messages}
@@ -620,11 +627,34 @@ export function BlendedChatPane({
           emotes={null}
           getMessageId={getMessageId}
           showSource={channels.length > 1}
+          headerInset={stackBottom}
           scrollToBottomRef={listScrollToBottomRef}
         />
-        {/* Pinned mentions (SN-284), and over them, in its own layer so they
-            never move, the card for one too old to scroll to. */}
-        <div className="pointer-events-none absolute left-3 right-3 top-0 z-20 flex flex-col items-center pt-2">
+        {/* The top-of-chat stack, over the feed: a strip per hype train, the
+            card for a mention too old to scroll to, then the pinned mentions. */}
+        <ChatOverlayStack top={8} maxHeight={topStack.maxHeight} more={topStack.more} onBottom={setStackBottom}>
+          <HypeStackCard
+            trains={trainList}
+            stack={topStack.control.hype}
+            measure={topStack.measure}
+            confettiTarget={feedEl}
+            renderLabel={(t) => (
+              <div className="flex items-center gap-1.5 px-1 pb-0.5">
+                <ProviderLogo provider="twitch" size={12} className="flex-shrink-0" />
+                <span className="truncate text-[11px] font-semibold text-textPrimary">
+                  {t.broadcaster_user_name || t.broadcaster_user_login}
+                </span>
+              </div>
+            )}
+          />
+          {pinCard && (
+            <MentionContextCard
+              entry={pinCard}
+              onDismiss={() => setPinCard(null)}
+              stack={topStack.control.mention_context}
+              measure={topStack.measure}
+            />
+          )}
           {pins && !readOnly && (
             <DesktopPins
               surfaceId="blended"
@@ -633,14 +663,11 @@ export function BlendedChatPane({
               chatViewActive
               searchOpen={false}
               onOpenOwn={openPinnedMention}
+              stack={topStack.control.mention_pins}
+              measure={topStack.measure}
             />
           )}
-        </div>
-        {pinCard && (
-          <div className="pointer-events-none absolute left-3 right-3 top-0 z-[21] flex flex-col items-center">
-            <MentionContextCard entry={pinCard} onDismiss={() => setPinCard(null)} />
-          </div>
-        )}
+        </ChatOverlayStack>
         {/* Identical to the core app's paused indicator (ChatWidget) so the resume
             affordance reads the same everywhere. */}
         {paused && (

@@ -166,6 +166,39 @@ export interface ChatTopStackOptions {
   stripsOnly?: boolean;
   /** The channel's pinned message is open (every writer feeds this). */
   channelPinOpened?: boolean;
+  /** The stack opened or folded the channel pin: written back to the one
+   *  per-room store, so the banner, the composer menu and the header's pin
+   *  button follow what a tap on the strip did. */
+  onChannelPinOpen?: (open: boolean) => void;
+  /** Ask Rust about these cards only (the other views of the chat column show
+   *  the hype train and nothing else); the rest stay mounted without a slot. */
+  only?: readonly StackKind[];
+}
+
+/** What a toggle did to the channel pin, for the store that owns its open
+ *  state: the new state when it changed, else null. */
+export function channelPinChange(
+  before: readonly { kind: StackKind; open: boolean }[],
+  after: readonly { kind: StackKind; open: boolean }[],
+): boolean | null {
+  const was = before.some((s) => s.kind === 'channel_pin' && s.open);
+  const now = after.some((s) => s.kind === 'channel_pin' && s.open);
+  return was === now ? null : now;
+}
+
+/** The viewer's choices after the channel pin's store changed from outside the
+ *  stack (the composer menu, the header's pin button): the same as a tap on
+ *  its strip. */
+export function applyChannelPin(
+  opened: StackKind | null,
+  folded: StackKind[],
+  open: boolean,
+): { opened: StackKind | null; folded: StackKind[] } {
+  if (open) return { opened: 'channel_pin', folded: folded.filter((k) => k !== 'channel_pin') };
+  return {
+    opened: opened === 'channel_pin' ? null : opened,
+    folded: folded.includes('channel_pin') ? folded : [...folded, 'channel_pin'],
+  };
 }
 
 const HEIGHT_SETTLE_MS = 150;
@@ -202,7 +235,21 @@ export function useChatTopStack(
   /** A card reports the height it drew in a form; Rust is sent the last of each. */
   measure: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
 } {
-  const { surface = '', phone = false, provider = null, channel = null, stripsOnly = false, channelPinOpened = false } = options;
+  const {
+    surface = '',
+    phone = false,
+    provider = null,
+    channel = null,
+    stripsOnly = false,
+    channelPinOpened = false,
+    onChannelPinOpen,
+    only,
+  } = options;
+  const onChannelPinOpenRef = useRef(onChannelPinOpen);
+  useEffect(() => {
+    onChannelPinOpenRef.current = onChannelPinOpen;
+  }, [onChannelPinOpen]);
+  const onlyKey = only ? only.join('|') || '-' : '';
   const order = useAppStore((s) => s.settings.chat_overlay_order) ?? 'prediction-first';
   const pollsStartCollapsed = useAppStore((s) => s.settings.chat_design?.polls_start_collapsed ?? false);
   const predictionsStartCollapsed = useAppStore(
@@ -253,7 +300,10 @@ export function useChatTopStack(
     };
   }, [column]);
 
-  const cards = useMemo(() => KINDS.filter((k) => ids[k] != null), [ids]);
+  const cards = useMemo(
+    () => KINDS.filter((k) => ids[k] != null && (onlyKey === '' || onlyKey.split('|').includes(k))),
+    [ids, onlyKey],
+  );
 
   // The room Rust named: the open and folded choices of that chat come back
   // when the surface moves to it, and are kept as the viewer makes them.
@@ -266,6 +316,24 @@ export function useChatTopStack(
     setOpened(kept?.opened ?? null);
     setFolded(kept?.folded ?? []);
   }, [roomKey, surface, phone]);
+
+  // The channel pin's store changed from outside the stack (the composer menu,
+  // the header's pin button): that is a tap on its strip. Not on the first
+  // render, where the request's `channel_pin_opened` already says so.
+  const seenPinOpen = useRef(channelPinOpened);
+  useEffect(() => {
+    if (seenPinOpen.current === channelPinOpened) return;
+    seenPinOpen.current = channelPinOpened;
+    const inLayout = layoutRef.current?.slots.some((s) => s.kind === 'channel_pin' && s.open) ?? false;
+    if (inLayout === channelPinOpened) return;
+    const next = applyChannelPin(openedRef.current, foldedRef.current, channelPinOpened);
+    openedRef.current = next.opened;
+    foldedRef.current = next.folded;
+    setOpened(next.opened);
+    setFolded(next.folded);
+    const key = roomKeyRef.current;
+    if (key) keptChoices.set(choiceKey(surfaceRef.current, key, phoneRef.current), next);
+  }, [channelPinOpened]);
 
   useEffect(() => {
     if (cards.length === 0) return;
@@ -349,7 +417,14 @@ export function useChatTopStack(
   }, []);
 
   const toggle = useCallback((kind: StackKind) => {
-    const next = toggleCard(layoutRef.current?.slots ?? [], openedRef.current, foldedRef.current, kind);
+    const before = layoutRef.current?.slots ?? [];
+    const next = toggleCard(before, openedRef.current, foldedRef.current, kind);
+    const pin = channelPinChange(before, next.slots);
+    if (pin !== null) {
+      // The strip's tap is the store's write too, so every other writer reads it.
+      seenPinOpen.current = pin;
+      onChannelPinOpenRef.current?.(pin);
+    }
     openedRef.current = next.opened;
     foldedRef.current = next.folded;
     setOpened(next.opened);
@@ -379,20 +454,22 @@ export function useChatTopStack(
     [toggle, report],
   );
 
+  // No card asked for: nothing is laid out, whatever the last answer said.
+  const asked = cards.length > 0;
   const control = useMemo(() => {
-    const slots = layout?.slots ?? [];
+    const slots = asked ? (layout?.slots ?? []) : [];
     return Object.fromEntries(
       KINDS.map((k) => {
         return [k, { ...slotControl(slots, k), ...handlers[k] }];
       }),
     ) as Record<StackKind, StackCardControl>;
-  }, [layout, handlers]);
+  }, [layout, handlers, asked]);
 
   return {
     control,
-    maxHeight: layout?.max_height ?? 0,
-    height: layout?.height ?? 0,
-    more: layout?.more ?? null,
+    maxHeight: asked ? (layout?.max_height ?? 0) : 0,
+    height: asked ? (layout?.height ?? 0) : 0,
+    more: asked ? (layout?.more ?? null) : null,
     measure,
   };
 }
@@ -442,4 +519,18 @@ export function useStackPresence(stack: StackCardControl | undefined, id: string
     // A card that came back while the old one was leaving keeps its slot.
     if (idRef.current === null) onPresence?.(null);
   }, [onPresence]);
+}
+
+/**
+ * Reports a card's identity to its stack for as long as it is mounted, with no
+ * exit to wait for (the hype train, the pinned message, the mention context
+ * card and the pinned mentions draw no leave animation of their own). The id is
+ * null while the card has nothing to show, which gives its slot back at once.
+ */
+export function useCardPresence(stack: StackCardControl | undefined, id: string | null): void {
+  const onPresence = stack?.onPresence;
+  useEffect(() => {
+    onPresence?.(id);
+  }, [onPresence, id]);
+  useEffect(() => () => onPresence?.(null), [onPresence]);
 }

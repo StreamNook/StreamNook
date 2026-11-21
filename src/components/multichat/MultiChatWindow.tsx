@@ -2385,6 +2385,7 @@ export default function MultiChatWindow() {
                       channelName={entry.channelName}
                       provider={entry.provider}
                       isActive={l.id === effectiveFocusedLeafId}
+                      surfaceId={`pane:${l.id}`}
                       filterId={entry.filterId ?? null}
                       onFilterIdChange={(id) => {
                         setChannels((prev) =>
@@ -2415,6 +2416,7 @@ export default function MultiChatWindow() {
                     channelName={entry.channelName}
                     provider={entry.provider}
                     isActive={entryKey(entry) === activeKey}
+                    surfaceId={`pane:${entryKey(entry)}`}
                     filterId={entry.filterId ?? null}
                     onFilterIdChange={(id) => {
                       const key = entryKey(entry);

@@ -3,7 +3,9 @@
 // one-line bar it folds to. Chat (ChatWidget) owns the pins, the fold and the
 // unpin; Settings > Chat's preview draws the same component with a sample pin.
 import { AnimatePresence, motion } from 'framer-motion';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { StackCard } from './ChatOverlayStack';
+import type { StackCardControl, StackKind } from './chatTopStack';
 import { CaretDown } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import type { ProviderId } from '../../types/providers';
@@ -57,6 +59,23 @@ interface PinnedBarProps {
   /** Drawn under the bar (or the open card) in the same column: the pinned
    *  mentions (SN-284), so the Twitch pin never moves when they come and go. */
   after?: ReactNode;
+  /** The pin as a card of the top-of-chat stack (SN-284): Rust says whether
+   *  it is open or a strip, it floats with the other cards instead of at
+   *  `top`, and a tap writes the one per-room open store through the stack. */
+  stack?: StackCardControl;
+  measure?: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
+}
+
+/** What the stack's `channel_pin` card reports while it has something to
+ *  draw: the pins' ids, or null (nothing to show, or a folded Hidden pin). */
+export function pinnedStackId(
+  pins: readonly { id: string }[],
+  expanded: boolean,
+  collapsedStyle: 'bar' | 'hidden',
+): string | null {
+  if (pins.length === 0) return null;
+  if (!expanded && collapsedStyle === 'hidden') return null;
+  return pins.map((p) => p.id).join('|');
 }
 
 export function PinnedBar({
@@ -72,26 +91,48 @@ export function PinnedBar({
   onBadgeClick,
   renderText,
   after,
+  stack,
+  measure,
 }: PinnedBarProps) {
   const design = useAppStore((s) => s.settings.chat_design);
+  const collapsedStyle = (design?.pinned_collapsed_style ?? 'bar') === 'hidden' ? 'hidden' : 'bar';
+  const onPresence = stack?.onPresence;
+  const stackId = pinnedStackId(pins, expanded, collapsedStyle);
+  useEffect(() => {
+    if (!onPresence) return;
+    onPresence(stackId);
+  }, [onPresence, stackId]);
+  useEffect(() => () => onPresence?.(null), [onPresence]);
   // With `after` the column stays mounted with no pin, so what it holds (the
   // pinned mentions) keeps its place and state when a pin comes or goes.
   if (pins.length === 0 && !after) return null;
   const hasPins = pins.length > 0;
-  return (
-    <div
-      className={`absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center ${hidden ? 'hidden' : ''}`}
-      style={{ top }}
-    >
+  // In the stack Rust's form decides which of the two the pin is.
+  const showOpen = hasPins && (stack ? stack.placed && stack.form === 'open' : expanded);
+  const showBar =
+    hasPins &&
+    !showOpen &&
+    collapsedStyle !== 'hidden' &&
+    (stack ? stack.placed && stack.form !== 'folded' : true);
+  const expand = (pinId: string) => {
+    stack?.onToggle();
+    onExpand(pinId);
+  };
+  const collapse = () => {
+    stack?.onToggle();
+    onCollapse();
+  };
+  const body = (
+    <>
       <AnimatePresence>
-        {hasPins && expanded && (
+        {showOpen && (
           <motion.div
             initial={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
             animate={{ opacity: 1, y: 0, scale: 1, height: 'auto' }}
             exit={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
             transition={{ duration: 0.3, ease: [0.175, 0.885, 0.32, 1.2] }}
             // The emote, bits and mod menus' glass, blur and corners.
-            className="glass-flyout rounded-xl !p-0 w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top cursor-pointer"
+            className={`glass-flyout rounded-xl !p-0 w-full max-w-sm ${stack ? "" : "mt-2"} pointer-events-auto overflow-hidden origin-top cursor-pointer`}
             // Clicking the open pin folds it back to the bar, the same gesture
             // that opened it. Interactive children (unpin, links, preview cards)
             // keep their own click, and a drag that selected text is a copy,
@@ -104,13 +145,13 @@ export function PinnedBar({
               const target = e.target as HTMLElement;
               if (target.closest('button, a, input, textarea, select, video, [role="button"]:not([data-pin-card]), [data-no-pin-toggle]')) return;
               if ((window.getSelection()?.toString() ?? '').length > 0) return;
-              onCollapse();
+              collapse();
             }}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                onCollapse();
+                collapse();
               }
             }}
             data-pin-card=""
@@ -268,7 +309,7 @@ export function PinnedBar({
           instead of hiding the pin entirely. Click to expand. Opt-out via
           chat_design.pinned_collapsed_style === 'hidden'. */}
       <AnimatePresence>
-        {hasPins && !expanded && (design?.pinned_collapsed_style ?? 'bar') !== 'hidden' && (() => {
+        {showBar && (() => {
           const pin = pins[0];
           return (
             <motion.button
@@ -277,8 +318,8 @@ export function PinnedBar({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              onClick={() => onExpand(pin.id)}
-              className="glass-flyout rounded-xl group w-full max-w-sm mt-2 pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors"
+              onClick={() => expand(pin.id)}
+              className={`${stack ? "" : "mt-2"} glass-flyout rounded-xl group w-full max-w-sm pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors`}
             >
               <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
                 <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
@@ -313,6 +354,22 @@ export function PinnedBar({
           );
         })()}
       </AnimatePresence>
+    </>
+  );
+  // A card of the stack: it floats with the others and Rust says where.
+  if (stack) {
+    return (
+      <StackCard kind="channel_pin" control={stack} measure={measure} className={hidden ? 'hidden' : ''}>
+        {body}
+      </StackCard>
+    );
+  }
+  return (
+    <div
+      className={`absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center ${hidden ? 'hidden' : ''}`}
+      style={{ top }}
+    >
+      {body}
       {after && <div className={`${hasPins ? 'mt-1.5' : 'mt-2'} flex w-full justify-center`}>{after}</div>}
     </div>
   );

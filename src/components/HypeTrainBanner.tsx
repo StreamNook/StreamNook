@@ -90,9 +90,12 @@ interface HypeTrainBannerProps {
    *  track row no taller than the track, no margin above), so the card is
    *  42 px instead of 52 and starts 8 px higher. Every number keeps its slot. */
   compact?: boolean;
+  /** The card is a card of the top-of-chat stack, which spaces its cards
+   *  itself: no margin above. */
+  inStack?: boolean;
 }
 
-export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onExpire, floating = false, compact = false }: HypeTrainBannerProps) {
+export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onExpire, floating = false, compact = false, inStack = false }: HypeTrainBannerProps) {
   // The top row's height and line, in one place, so the chips, the level and
   // the words always share it.
   const rowH = compact ? 'h-4' : 'h-[18px]';
@@ -259,7 +262,7 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
           an inset track with the percentage at its end. On a level-up the top
           row makes way for the words and the track fills to the brim. */}
       <div
-        className={`hype-train-card ${GLAZE_BANNER} ${floating ? '' : 'chrome-glaze--flat'} relative ${compact ? '' : 'mt-2'} overflow-hidden pointer-events-none`}
+        className={`hype-train-card ${GLAZE_BANNER} ${floating ? '' : 'chrome-glaze--flat'} relative ${compact || inStack ? '' : 'mt-2'} overflow-hidden pointer-events-none`}
         style={{ ...CARD_STYLE, ...paletteStyle(palette) }}
         data-look={lookName(trainLook)}
         data-themed={palette ? '' : undefined}

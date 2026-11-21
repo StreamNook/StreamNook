@@ -53,7 +53,7 @@ describe('chat top stack: the TS shapes match Rust', () => {
 
   it('both shells lay out their cards with it', () => {
     const desktop = read('src/components/ChatWidget.tsx');
-    expect(desktop).toContain('useChatTopStack(chatContainerEl)');
+    expect(desktop).toContain('useChatTopStack(chatContainerEl, {');
     expect(desktop).toContain('maxHeight={topStack.maxHeight}');
     const phone = read('src/mobile/screens/WatchScreen.tsx');
     expect(phone).toContain('useChatTopStack(chatColumnEl)');

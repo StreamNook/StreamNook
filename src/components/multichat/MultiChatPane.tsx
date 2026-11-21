@@ -35,6 +35,10 @@ export interface MultiChatPaneProps {
   /** Saved message filter bound to this pane (persisted per tab by the window). */
   filterId?: string | null;
   onFilterIdChange?: (id: string | null) => void;
+  /** The pin surface this pane is (SN-284): `pane:<split leaf id>` in a split,
+   *  `pane:<entry key>` in a column, so a pane's pins and its open and folded
+   *  cards survive a reorder and never share a key with a pane of the same chat. */
+  surfaceId?: string;
 }
 
 const STREAM_POLL_INTERVAL_MS = 30_000;
@@ -47,7 +51,7 @@ interface ChannelUserInfo {
   broadcaster_type?: string;
 }
 
-function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, onFilterIdChange }: MultiChatPaneProps) {
+function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, onFilterIdChange, surfaceId }: MultiChatPaneProps) {
   const channelKey = channel.toLowerCase();
 
   const [userInfo, setUserInfo] = useState<ChannelUserInfo | null>(null);
@@ -132,6 +136,7 @@ function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, o
       hypeTrainOverride={paneHypeTrain}
       filterId={filterId}
       onFilterIdChange={onFilterIdChange}
+      surfaceId={surfaceId}
     />
   );
 }
@@ -165,7 +170,7 @@ function metaCommandFor(provider?: ProviderId): string | null {
 // metadata the backend captured from the Kick channel API at resolve time. Uptime
 // ticks live in ChatWidget from `started_at`; viewer count is the resolve-time
 // snapshot until a live refresh lands (the Kick API is Cloudflare-gated).
-function ProviderViaChatWidget({ channel, channelId, channelName, provider, isActive }: MultiChatPaneProps) {
+function ProviderViaChatWidget({ channel, channelId, channelName, provider, isActive, surfaceId }: MultiChatPaneProps) {
   const slug = channel.toLowerCase();
   const [meta, setMeta] = useState<ProviderChannelMeta | null>(null);
   const metaCommand = metaCommandFor(provider);
@@ -237,7 +242,7 @@ function ProviderViaChatWidget({ channel, channelId, channelName, provider, isAc
     }),
     [provider, slug, meta, channelId, channelName, channel, isActive],
   );
-  return <ChatWidget channelOverride={channelOverride} />;
+  return <ChatWidget channelOverride={channelOverride} surfaceId={surfaceId} />;
 }
 
 // This wrapper holds no hooks before the branch (rules-of-hooks).

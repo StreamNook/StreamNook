@@ -19,6 +19,7 @@ import { armThaw, touchPauseIntent } from './chat/chatHold';
 import { lineButtons, type LineButton } from './chat/modLine';
 import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons } from './chat/lineArt';
 import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
+import { spacerScrollDelta, supportsOverflowAnchor } from './chat/stackSpacer';
 import { IS_MAC, IS_MOBILE } from '../utils/platform';
 import { releaseRowImagesOnUnmount } from '../utils/releaseImages';
 
@@ -385,10 +386,14 @@ const ChatMessageList = memo(function ChatMessageList({
   homeProvider,
   showSource,
   headerSpaceReserved,
-  headerInset = 40,
+  headerInset,
   pinnedIds,
   scrollToBottomRef,
 }: ChatMessageListProps) {
+  // The spacer at the top of the list: how much of it the floating chrome (the
+  // header, the top-of-chat stack) covers. A host that measured it says so with
+  // `headerInset`, even when something in flow already cleared the header.
+  const topSpace = headerInset ?? (headerSpaceReserved ? 0 : 40);
   // While a moderator presses a mod button, or a row to slide or drag it, the
   // list keeps drawing the rows that were on screen, so nothing moves and
   // nothing is trimmed away however fast chat runs; it catches up to live when
@@ -412,6 +417,16 @@ const ChatMessageList = memo(function ChatMessageList({
     setFrozenView(want ? shownRef.current : null);
   }, []);
   const containerRef = useRef<HTMLDivElement>(null);
+  // A browser without overflow anchoring (WebKit) would show the rows jump by
+  // the spacer's change; the same layout pass moves the scroll by it.
+  const spacerRef = useRef(topSpace);
+  useLayoutEffect(() => {
+    const prev = spacerRef.current;
+    spacerRef.current = topSpace;
+    const delta = spacerScrollDelta(prev, topSpace, supportsOverflowAnchor());
+    const el = containerRef.current;
+    if (delta !== 0 && el) el.scrollTop += delta;
+  }, [topSpace]);
   // Inner messages-wrapper div. We observe its size with a ResizeObserver so
   // that any height change (badge/emote/cosmetic images settling in after a
   // new message's first paint, content-visibility resolving to a slightly
@@ -1246,10 +1261,10 @@ const ChatMessageList = memo(function ChatMessageList({
         <div
           ref={contentRef}
           className={`flex flex-col min-h-full justify-end${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
-          style={headerSpaceReserved ? undefined : { paddingTop: headerInset }}
+          style={topSpace > 0 ? { paddingTop: topSpace } : undefined}
           // How much of the list's top the floating header covers; the mod
           // slider's chip goes under a line that close to it.
-          data-header-inset={headerSpaceReserved ? 0 : headerInset}
+          data-header-inset={topSpace}
           data-entrance={chatDesign?.message_entrance && chatDesign.message_entrance !== 'none' ? chatDesign.message_entrance : undefined}
         >
           {messages.map((message, index) => {

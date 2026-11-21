@@ -6,6 +6,9 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MentionPinsBlock, type PinsForm } from './MentionPins';
+import { pinsFormOf, pinsMeasureForm } from './pinsForm';
+import { StackCard } from '../chat/ChatOverlayStack';
+import type { StackCardControl, StackKind } from '../chat/chatTopStack';
 import { roomRef, useMentionPins, usePinSurface } from '../../hooks/useMentionPins';
 import { useDesktopChatShown } from '../../hooks/useChatSurfaceShown';
 import { requestMentionFocus } from '../../stores/mentionFocusStore';
@@ -37,6 +40,11 @@ export interface DesktopPinsProps {
   /** The answer, for a host that lays its stack out around the pins. */
   onPins?: (pins: readonly MentionPin[]) => void;
   className?: string;
+  /** The pins as the `mention_pins` card of the top-of-chat stack: Rust's slot
+   *  gives the form, the height and the folded-card count, and the block's
+   *  drawn heights go back to the stack's cache. */
+  stack?: StackCardControl;
+  measure?: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
 }
 
 /** Hooks half: the surface and its answer. */
@@ -99,8 +107,46 @@ export function DesktopPins(props: DesktopPinsProps) {
   useEffect(() => {
     onPins?.(pins);
   }, [pins, onPins]);
+  const { stack, measure } = props;
+  const onPresence = stack?.onPresence;
+  // The card has something to show while there are pins; the stack hides it
+  // (no slot) while chat search is open or another view replaces chat.
+  const present = pins.length > 0 && !props.searchOpen;
+  useEffect(() => {
+    onPresence?.(present ? 'pins' : null);
+  }, [onPresence, present]);
+  useEffect(() => () => onPresence?.(null), [onPresence]);
+  const onMeasure = useCallback(
+    (m: { form: PinsForm; height: number }) => {
+      props.onMeasure?.(m);
+      measure?.('mention_pins', pinsMeasureForm(m.form), m.height);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the host's callback is read on each measure
+    [measure, props.onMeasure],
+  );
   // The stack is hidden while chat search is open (its results own the top).
-  if (pins.length === 0 || props.searchOpen) return null;
+  if (!present) return null;
+  if (stack) {
+    // No slot (not placed, or folded into the count of another card): nothing drawn.
+    if (!stack.placed || stack.form === 'folded') return null;
+    return (
+      <StackCard kind="mention_pins" control={stack} className="w-full">
+        <MentionPinsBlock
+          pins={pins}
+          form={pinsFormOf(stack.form)}
+          height={stack.height}
+          moreCards={stack.moreCards}
+          shown={shown}
+          reportVisible={reportVisible}
+          onOpenOwn={openOwn}
+          onOpenOther={openOther}
+          onUsernameClick={openPinnedProfile}
+          onMeasure={onMeasure}
+          className={props.className}
+        />
+      </StackCard>
+    );
+  }
   return (
     <MentionPinsBlock
       pins={pins}
