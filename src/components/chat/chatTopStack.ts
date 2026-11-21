@@ -495,7 +495,8 @@ const LEAVE_FALLBACK_MS = 1000;
  */
 export function useStackPresence(stack: StackCardControl | undefined, id: string | null): () => void {
   const onPresence = stack?.onPresence;
-  const drawn = id !== null && (stack?.placed ?? false);
+  // A folded card is not drawn, so it has no exit to wait for.
+  const drawn = id !== null && (stack?.placed ?? false) && stack?.form !== 'folded';
   const idRef = useRef(id);
   // Whether the last render drew the card, i.e. whether there is an exit to wait for.
   const drawnRef = useRef(false);

@@ -23,6 +23,7 @@ import { X } from 'phosphor-react';
 import ChatMessage from '../ChatMessage';
 import { ProviderLogo } from '../ProviderLogo';
 import { Tooltip } from '../ui/Tooltip';
+import { useAppStore } from '../../stores/AppStore';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { NameColorToneContext } from '../../hooks/useNameColor';
 import { releaseRowImagesOnUnmount } from '../../utils/releaseImages';
@@ -30,6 +31,7 @@ import { observeOffscreen } from '../../utils/offscreenPause';
 import { cosmeticsKey } from '../../utils/chatterIdentity';
 import { OVER_VIDEO_CLASS, useOverVideoStyle, useThemeDark } from '../../mobile/chat/overVideo';
 import { Logger } from '../../utils/logger';
+import { edgeFade, readEdges } from '../chat/edgeFade';
 import { HOLD_MS, dayLabelFor, mergeHeld } from './pinsHold';
 import type { MentionPin } from '../../types';
 import type { ProviderId } from '../../types/providers';
@@ -115,13 +117,17 @@ const PinRow = memo(function PinRow({ pin, phone, warm, onOpen, onDismiss, onUse
     [pin.rev, pin.day, pin.entry.at_ms],
   );
   const reply = pin.entry.kind === 'reply';
+  const dividers = useAppStore((s) => s.settings?.chat_design?.show_dividers !== false);
   return (
     <div
       ref={ref}
       data-pin-id={pin.entry.id}
       data-pin-kind={pin.entry.kind}
       dir="ltr"
-      className="relative group"
+      // The row's own line, the card's width less an even inset, never above the first row.
+      className={`relative group ${
+        dividers ? 'before:pointer-events-none before:absolute before:inset-x-2 before:top-0 before:h-px before:bg-borderSubtle first:before:hidden' : ''
+      }`}
     >
       {mark && (
         <div className="flex items-center gap-1 px-3 pt-1 text-[11px] leading-4 text-textMuted min-w-0">
@@ -135,7 +141,12 @@ const PinRow = memo(function PinRow({ pin, phone, warm, onOpen, onDismiss, onUse
         role="button"
         tabIndex={0}
         aria-label={`${pin.entry.sender_name || pin.entry.sender_login} ${reply ? 'replied to you' : 'mentioned you'}. Open it`}
-        className="cursor-pointer pr-9"
+        // The row's own right padding makes room for the clock, the run count and X (their
+        // widths and the inset, plus a little air), so a row's tint (a gift's wash) runs to the
+        // card's edge and no word ever runs under the controls.
+        className={`cursor-pointer ${
+          phone ? (pin.run > 1 ? '[&>*]:!pr-[78px]' : '[&>*]:!pr-[54px]') : pin.run > 1 ? '[&>*]:!pr-[70px]' : '[&>*]:!pr-[46px]'
+        }`}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest('a, button, input')) return;
           onOpen(pin);
@@ -158,7 +169,8 @@ const PinRow = memo(function PinRow({ pin, phone, warm, onOpen, onDismiss, onUse
           }
         />
       </div>
-      <div className="absolute right-1.5 top-1.5 flex items-center gap-1.5">
+      {/* On the message's first line: under the channel mark (20 px) when the row has one. */}
+      <div className={`absolute right-1.5 flex items-center gap-1.5 ${mark ? 'top-[26px]' : 'top-1.5'}`}>
         {pin.run > 1 && <span className="text-[11px] font-semibold tabular-nums text-textMuted">×{pin.run}</span>}
         <ClockDot clock={pin.clock} />
         <button
@@ -344,11 +356,28 @@ export function MentionPinsBlock({
   // ---- the newest stays in view -------------------------------------------
   const lastId = shownPins[shownPins.length - 1]?.entry.id;
   const stuckToEnd = useRef(true);
+  const frozenRef = useRef(frozen);
+  useEffect(() => {
+    frozenRef.current = frozen;
+  }, [frozen]);
+  // Which edges of the list have more rows beyond them: those edges fade, so a row
+  // cut by the card's edge reads as "more", never as a hard slice.
+  const [edges, setEdges] = useState({ top: false, bottom: false });
+  const syncEdges = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const next = readEdges(el);
+    setEdges((prev) => (prev.top === next.top && prev.bottom === next.bottom ? prev : next));
+  }, []);
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || form !== 'full' || !stuckToEnd.current || frozen) return;
-    el.scrollTop = el.scrollHeight;
-  }, [lastId, form, frozen, shownPins.length]);
+    if (!el || form !== 'full') {
+      setEdges((prev) => (prev.top || prev.bottom ? { top: false, bottom: false } : prev));
+      return;
+    }
+    if (stuckToEnd.current && !frozen) el.scrollTop = el.scrollHeight;
+    syncEdges();
+  }, [lastId, form, frozen, shownPins.length, syncEdges]);
 
   // ---- measuring (the stack keeps the last height of each form) -----------
   // The list pans only when its rows overflow, and only from a touch that starts
@@ -367,17 +396,33 @@ export function MentionPinsBlock({
 
   useEffect(() => {
     const el = rootRef.current;
-    if (!el || !onMeasure || typeof ResizeObserver === 'undefined') return;
+    if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       const inner = scrollRef.current;
-      // The full form reports its natural height (every row), not the cap.
-      const h = form === 'full' && inner ? inner.scrollHeight : el.getBoundingClientRect().height;
+      // A row that grows (an emote or a badge landing) keeps the newest in view and
+      // moves the fades.
+      if (form === 'full' && inner) {
+        if (stuckToEnd.current && !frozenRef.current) inner.scrollTop = inner.scrollHeight;
+        syncEdges();
+      }
+      if (!onMeasure) return;
+      // What is reported is the natural height, never the box: the block is held to the
+      // height Rust gave it, so its own box would only confirm that height (a newest row
+      // taller than the floor lost its count line for good). Full: every row plus what is
+      // not the scroller (the count line). The other forms: all their content.
+      const h =
+        form === 'full' && inner
+          ? inner.scrollHeight + (el.clientHeight - inner.clientHeight)
+          : Math.max(el.getBoundingClientRect().height, el.scrollHeight);
       if (h > 0) onMeasure({ form, height: Math.round(h) });
     });
     ro.observe(el);
     if (scrollRef.current) ro.observe(scrollRef.current);
+    // The rows too: inside a scroller held shorter than its rows, a row that grows moves
+    // neither box above.
+    el.querySelectorAll('[data-pin-id]').forEach((row) => ro.observe(row));
     return () => ro.disconnect();
-  }, [form, onMeasure]);
+  }, [form, onMeasure, drawnKey, syncEdges]);
 
   const overVideoVars = useOverVideoStyle(overVideo);
   const themeDark = useThemeDark();
@@ -399,10 +444,16 @@ export function MentionPinsBlock({
     moreCards > 0 ? ` · ${moreCards} more ${moreCards === 1 ? 'card' : 'cards'}` : ''
   }`;
 
-  const surface = phone
-    ? 'chrome-glaze !rounded-2xl'
-    : 'glass-flyout rounded-xl';
-  const style: CSSProperties = { ...overVideoVars, maxHeight: height && height > 0 ? height : undefined };
+  // Over the picture the glaze's thin tint cannot hold the words against a bright frame
+  // (the time, the reply line and the count read 1.5:1 on a white menu), so the card takes
+  // a real film under the tint, as the other lone surfaces over video do (--glaze-frost).
+  const surface = phone ? 'chrome-glaze !rounded-2xl' : 'glass-flyout rounded-xl';
+  const style: CSSProperties = {
+    ...overVideoVars,
+    // Inline: `.chrome-glaze` sets the knob itself, so a utility class would lose.
+    ...(phone && overVideo ? ({ '--glaze-frost': '55%' } as CSSProperties) : null),
+    maxHeight: height && height > 0 ? height : undefined,
+  };
 
   const countLine = (
     <div className="flex items-center justify-between gap-2 px-3 py-1 text-[11px] leading-4 text-textMuted" data-pins-count>
@@ -482,9 +533,11 @@ export function MentionPinsBlock({
             <div
               ref={scrollRef}
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+              style={edgeFade(edges)}
               onScroll={(e) => {
                 const el = e.currentTarget;
                 stuckToEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+                syncEdges();
               }}
             >
               {shownPins.map(row)}

@@ -3489,7 +3489,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, pinned, onUsername
   // when a new message arrives, the "absolute bottom" of the chat has no
   // 1px line that needs to move with the layout. Removes a tiny vertical
   // shimmer at the bottom edge.
-  const borderClass = chatDesign?.show_dividers !== false ? 'border-t border-borderSubtle' : '';
+  // A pinned row draws no divider of its own: the pins block draws one per row, the width of
+  // its card and never above the first row, so the lines meet both edges evenly.
+  const borderClass = !pinned && chatDesign?.show_dividers !== false ? 'border-t border-borderSubtle' : '';
 
   // StreamNook badge: regular-message render path (the 5th badge render site).
   // Bits, donation, watchstreak, and subscription messages each have their own

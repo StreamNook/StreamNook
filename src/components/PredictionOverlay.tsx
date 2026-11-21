@@ -171,7 +171,9 @@ const PredictionOverlay = ({ channelId, channelLogin, stack, previewView, previe
   const isExpanded = stack ? stack.open : expandedHere;
   const toggle = stack ? stack.onToggle : () => setExpandedHere(!expandedHere);
 
-  if (!view || (stack && !stack.placed)) return <StackCardPresence onLeft={released} />;
+  // Folded into "N more cards" (or no slot yet): nothing is drawn, so the stack never
+  // runs past the height Rust gave it, but the prediction stays mounted and keeps its slot.
+  if (!view || (stack && (!stack.placed || stack.form === 'folded'))) return <StackCardPresence onLeft={released} />;
 
   const handlePredict = async () => {
     if (!currentChannelId || !side || !bet || submitting) return;

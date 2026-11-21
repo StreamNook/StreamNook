@@ -132,7 +132,7 @@ export function PinnedBar({
             exit={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
             transition={{ duration: 0.3, ease: [0.175, 0.885, 0.32, 1.2] }}
             // The emote, bits and mod menus' glass, blur and corners.
-            className={`glass-flyout rounded-xl !p-0 w-full max-w-sm ${stack ? "" : "mt-2"} pointer-events-auto overflow-hidden origin-top cursor-pointer`}
+            className={`glass-flyout rounded-xl !p-0 w-full ${stack ? "" : "max-w-sm mt-2"} pointer-events-auto overflow-hidden origin-top cursor-pointer`}
             // Clicking the open pin folds it back to the bar, the same gesture
             // that opened it. Interactive children (unpin, links, preview cards)
             // keep their own click, and a drag that selected text is a copy,
@@ -319,7 +319,7 @@ export function PinnedBar({
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
               onClick={() => expand(pin.id)}
-              className={`${stack ? "" : "mt-2"} glass-flyout rounded-xl group w-full max-w-sm pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors`}
+              className={`${stack ? "" : "max-w-sm mt-2"} glass-flyout rounded-xl group w-full pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors`}
             >
               <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
                 <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>

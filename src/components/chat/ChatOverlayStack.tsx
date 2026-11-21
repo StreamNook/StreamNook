@@ -3,7 +3,6 @@ import { useAppStore } from '../../stores/AppStore';
 import { usePerformanceQuiet } from '../../utils/lowPower';
 import type { StackCardControl, StackKind, StackMore } from './chatTopStack';
 import { stackBottomOf } from './stackSpacer';
-
 /**
  * Holds the cards at the top of chat (the hype train, the poll and prediction,
  * the channel's pinned message, the mention context card, the pinned mentions)
@@ -171,7 +170,11 @@ export function StackCard({
       data-stack-card={kind}
       data-form={control.form ?? ''}
       className={`${folded ? 'hidden' : 'flex'} min-w-0 shrink-0 flex-col ${
-        capped ? 'overflow-y-auto overscroll-contain' : ''
+        // The card inside keeps its natural height: left to shrink (it clips itself), it
+        // cut its last line mid-glyph and nothing here ever scrolled. No edge fade here: a
+        // mask on this element would make it the backdrop root of the glass card inside and
+        // flatten that card's blur.
+        capped ? 'overflow-y-auto overscroll-contain [&>*]:shrink-0' : ''
       } ${className}`}
       style={{ order: control.order, maxHeight: capped ? control.height : undefined }}
     >
