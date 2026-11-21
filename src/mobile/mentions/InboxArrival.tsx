@@ -122,13 +122,17 @@ export const InboxArrival: React.FC<{ side: 'left' | 'right'; surface: InboxSurf
             <InboxFace face={v.face} avatar={v.avatar} size={36} />
             <span className="flex-1 min-w-0 flex flex-col">
               <span className="flex items-baseline gap-1.5 min-w-0 leading-[18px]">
-                <span className="text-[14px] font-bold truncate text-textPrimary" style={v.color ? { color: v.color } : undefined}>
+                <span
+                  className="text-[14px] font-bold truncate min-w-0 max-w-[55%] text-textPrimary"
+                  style={v.color ? { color: v.color } : undefined}
+                >
                   {v.name}
                 </span>
-                <span className="shrink-0 text-[12.5px] text-textMuted">
-                  {v.lead}
-                  {v.place ? ` ${v.place}` : ''}
-                </span>
+                {/* The lead and the place give way separately, as in the inbox
+                    row, so a long lead ("gifted you a sub in") never crushes
+                    the name. */}
+                <span className="shrink-0 text-[12.5px] text-textMuted">{v.lead}</span>
+                {v.place && <span className="min-w-0 truncate text-[12.5px] text-textMuted">{v.place}</span>}
                 <span className="flex-1" />
                 <span className="shrink-0 text-[11.5px] text-textMuted tabular-nums">now</span>
               </span>

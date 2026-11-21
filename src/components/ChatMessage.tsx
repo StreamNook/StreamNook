@@ -2737,7 +2737,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             className="flex-1 min-w-0 flex flex-col leading-relaxed"
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
-            <p className="text-white font-semibold leading-relaxed">
+            <p className="text-textPrimary font-semibold leading-relaxed">
               {sourceMarkEl}
               {sharedCardFaceEl}
               {renderBadges()}
@@ -2895,7 +2895,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             className="flex-1 min-w-0 flex flex-col leading-relaxed"
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
-            <p className="text-white font-semibold leading-relaxed">
+            <p className="text-textPrimary font-semibold leading-relaxed">
               {sourceMarkEl}
               {sharedCardFaceEl}
               {renderBadges()}
@@ -3003,7 +3003,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             className="flex-1 min-w-0 flex flex-col"
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
-            <p className="text-white font-semibold leading-relaxed flex items-center flex-wrap gap-1">
+            <p className="text-textPrimary font-semibold leading-relaxed flex items-center flex-wrap gap-1">
               {sourceMarkEl}
               {sharedCardFaceEl}
               {renderBadges()}
@@ -3208,19 +3208,27 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       giftEdge && chatDesign?.mention_hold === true
         ? mentionHoldBackground(giftEdge, Math.max(0, Math.min(100, chatHighlights?.appearance?.opacity ?? 20)))
         : undefined;
+    // The edge takes its 4 px out of the padding, so the card's content holds
+    // the same column as the gift cards around it. Outline cards are rounded:
+    // there the edge is the card's own ring, in the mention color. The hold
+    // tint lies over the card's gradient (--sn-sub-wash), not instead of it.
+    const giftOutline = (chatEvents?.event_style ?? 'cards') === 'outline';
+    const giftEdgeStyle: React.CSSProperties = giftOutline
+      ? ({ '--sn-event-outline': giftEdge } as React.CSSProperties)
+      : { borderLeftColor: giftEdge ?? undefined, borderLeftWidth: '4px', borderLeftStyle: 'solid', paddingLeft: 'calc(0.75rem - 4px)' };
     const giftFrame: React.CSSProperties = giftEdge
-      ? ({
-          borderLeftColor: giftEdge,
-          borderLeftWidth: '4px',
-          borderLeftStyle: 'solid',
-          '--flash-accent-color': giftEdge,
-          ...(giftHold ? { backgroundImage: giftHold } : {}),
-        } as React.CSSProperties)
+      ? {
+          ...({ '--flash-accent-color': giftEdge } as React.CSSProperties),
+          ...giftEdgeStyle,
+          ...(giftHold ? { backgroundImage: `${giftHold}, var(--sn-sub-wash, none)` } : {}),
+        }
       : {};
     const giftFlash = giftEdge && chatDesign?.mention_animation !== false ? ' animate-mention-flash' : '';
 
     return (
-      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('subscription-gradient')}${sharedCardClass}${giftFlash}`} style={{ ...eventCardStyle, ...sharedCardVars, ...giftFrame, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      // A gift to you drops the Shared Chat partner edge, as a mention row
+      // does (one stripe, not two); the partner's face still marks the card.
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('subscription-gradient')}${giftEdge ? '' : sharedCardClass}${giftFlash}`} style={{ ...eventCardStyle, ...sharedCardVars, ...giftFrame, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             {/* Prime logo for Prime subs, Twitch's gift for other subs */}
@@ -3236,7 +3244,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             className="flex-1 min-w-0 flex flex-col leading-relaxed"
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
-            <p className="text-white font-semibold leading-relaxed">
+            <p className="text-textPrimary font-semibold leading-relaxed">
               {sourceMarkEl}
               {sharedCardFaceEl}
               {parseSystemMessageWithClickableNames(displayMessage)}
@@ -3319,7 +3327,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             className="flex-1 min-w-0 flex flex-col leading-relaxed"
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
-            <p className="text-white font-semibold leading-relaxed">
+            <p className="text-textPrimary font-semibold leading-relaxed">
               {sourceMarkEl}
               {sharedCardFaceEl}
               {raidTemplate ? (

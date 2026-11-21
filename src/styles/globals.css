@@ -3641,21 +3641,24 @@ html[data-motion="reduced"] .sub-progress-fill {
 /* Mention Flash Animation (Red-shift effect). Only the wash fades: the row's
    color edge is its own inline style and stays put, so it never fades out over
    the last half second and snaps back when the animation ends. */
+/* It fades to --flash-rest: a row's is transparent, but a card with its own
+   ground (the gift card for you) sets it to that ground, or the card would
+   show the panel through it while flashing and snap darker at the end. */
 @keyframes mention-flash {
   0% {
-    background-color: color-mix(in srgb, var(--flash-accent-color) 50%, transparent);
+    background-color: color-mix(in srgb, var(--flash-accent-color) 50%, var(--flash-rest, transparent));
   }
   25% {
-    background-color: color-mix(in srgb, var(--flash-accent-color) 40%, transparent);
+    background-color: color-mix(in srgb, var(--flash-accent-color) 40%, var(--flash-rest, transparent));
   }
   50% {
-    background-color: color-mix(in srgb, var(--flash-accent-color) 30%, transparent);
+    background-color: color-mix(in srgb, var(--flash-accent-color) 30%, var(--flash-rest, transparent));
   }
   75% {
-    background-color: color-mix(in srgb, var(--flash-accent-color) 20%, transparent);
+    background-color: color-mix(in srgb, var(--flash-accent-color) 20%, var(--flash-rest, transparent));
   }
   100% {
-    background-color: transparent;
+    background-color: var(--flash-rest, transparent);
   }
 }
 
@@ -4242,9 +4245,12 @@ html[data-motion="reduced"] .sub-progress-fill {
   .sn-ft-anim-bar::after { animation: none !important; opacity: 0 !important; }
 }
 
+/* The gradient lives in --sn-sub-wash so a held mention tint on a gift to you
+   lies over it (ChatMessage layers both) instead of replacing it, and
+   --flash-rest lets the mention flash end on this card's own ground. */
 .subscription-gradient {
-  background-color: var(--color-background);
-  background-image: linear-gradient(
+  --flash-rest: var(--color-background);
+  --sn-sub-wash: linear-gradient(
     90deg,
     color-mix(in srgb, var(--color-highlight-pink) 15%, transparent) 0%,
     color-mix(in srgb, var(--color-highlight-purple) 12%, transparent) 20%,
@@ -4253,6 +4259,8 @@ html[data-motion="reduced"] .sub-progress-fill {
     color-mix(in srgb, var(--color-highlight-yellow) 10%, transparent) 80%,
     color-mix(in srgb, var(--color-highlight-pink) 15%, transparent) 100%
   );
+  background-color: var(--color-background);
+  background-image: var(--sn-sub-wash);
   background-size: 100% 100%;
   /* Static by design: the built-in Twitch event styles keep their color but no
      motion. Animated/living cosmetics are reserved for StreamNook subscribers
@@ -4261,8 +4269,7 @@ html[data-motion="reduced"] .sub-progress-fill {
 }
 
 .subscription-gradient:hover {
-  background-color: var(--color-background);
-  background-image: linear-gradient(
+  --sn-sub-wash: linear-gradient(
     90deg,
     color-mix(in srgb, var(--color-highlight-pink) 20%, transparent) 0%,
     color-mix(in srgb, var(--color-highlight-purple) 17%, transparent) 20%,
@@ -4271,6 +4278,8 @@ html[data-motion="reduced"] .sub-progress-fill {
     color-mix(in srgb, var(--color-highlight-yellow) 15%, transparent) 80%,
     color-mix(in srgb, var(--color-highlight-pink) 20%, transparent) 100%
   );
+  background-color: var(--color-background);
+  background-image: var(--sn-sub-wash);
   background-size: 100% 100%;
 }
 

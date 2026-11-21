@@ -6989,7 +6989,12 @@ mod own_message_tests {
         assert_eq!(kind_for(&verdict, true), Some(MentionKind::Gift));
         let entry = entry_for(&mine, MentionKind::Gift, 0);
         assert_eq!(entry.room, "maefae");
-        assert_eq!(entry.text, "Gifter gifted a Tier 1 sub to Rainy!");
+        // The headline says the gift; the words add the tier, and what
+        // Twitch's sentence says past its first one.
+        assert_eq!(entry.text, "A Tier 1 sub.");
+        let mut more = mine.clone();
+        more.metadata.system_message = Some("Gifter gifted a Tier 1 sub to Rainy! They have given 5 Gift Subs in the channel!".into());
+        assert_eq!(entry_for(&more, MentionKind::Gift, 0).text, "A Tier 1 sub. They have given 5 Gift Subs in the channel!");
         assert_eq!(notice_text(&entry).headline, "Gifter gifted you a sub in maefae");
 
         let mut theirs = IrcService::parse_live_usernotice(&line("g2", "subgift", "Gifter", "Lucky", "777"), 1).expect("parses");

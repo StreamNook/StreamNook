@@ -105,7 +105,8 @@ const MENTION_KIND_WORDS: Record<MentionKind, string> = {
 // highlighter for one of your highlight words, and the gift sub rows' own
 // pink gift for a sub gifted to you.
 const MentionGlyph = ({ kind, size }: { kind: MentionKind; size: number }) => {
-    if (kind === 'gift') return <Gift size={size} className="text-pink-400 flex-shrink-0" />;
+    // One step up, the size the gift-sub rows draw it at.
+    if (kind === 'gift') return <Gift size={size + 1} className="text-pink-400 flex-shrink-0" />;
     const Icon = kind === 'reply' ? Reply : kind === 'word' ? Highlighter : AtSign;
     // The reply arrow's ink is short and wide; a step up matches the @'s weight.
     return <Icon size={kind === 'reply' ? Math.round(size * 1.2) : size} className="text-accent flex-shrink-0" />;
@@ -136,7 +137,9 @@ const MentionRowBody = ({ entry, foldedCount, showPlatform }: { entry: MentionEn
                     </span>
                     <span className="sr-only">{MENTION_KIND_WORDS[entry.kind]}</span>
                     {/* Smaller type than the name, nudged onto its baseline. */}
-                    <span className="flex-shrink-0 translate-y-px text-[12.5px] text-white/40">in</span>
+                    <span className="flex-shrink-0 translate-y-px text-[12.5px] text-white/40">
+                        {entry.kind === 'gift' ? 'gifted you a sub in' : 'in'}
+                    </span>
                     <span className="flex min-w-0 items-center gap-1 text-[12.5px] text-white/70">
                         {platform && <ProviderIcon provider={platform} size="12px" />}
                         <span className="truncate translate-y-px">{entry.channel_login}</span>
@@ -2351,7 +2354,7 @@ const DynamicIsland = () => {
                                         <span ref={previewTextRef} className="text-white text-[11px] font-medium truncate min-w-0">
                                             {getPreviewText(latestNotification)}
                                             {/* A mention also says what was said, quieter, after its line. */}
-                                            {latestNotification.type === 'mention' && !latestNotification.data.removed && !!latestNotification.data.text && (
+                                            {latestNotification.type === 'mention' && latestNotification.data.kind !== 'gift' && !latestNotification.data.removed && !!latestNotification.data.text && (
                                                 <span className="ml-1.5 font-normal text-white/55">{latestNotification.data.text}</span>
                                             )}
                                             {latestNotification.type === 'whisper_row' && !!latestNotification.data.last_text && (

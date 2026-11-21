@@ -978,9 +978,9 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         },
         // The color the chat row shows, so a dark name stays readable.
         sender_color: Some(crate::services::chat_row_view::readable_color(msg.color.as_deref())),
-        // A gift notice has no words of its own; the platform's sentence
-        // ("X gifted a Tier 1 sub to you!") is what it says.
-        text: gift_text(msg, kind).unwrap_or(&msg.content).chars().take(MAX_TEXT).collect(),
+        // A gift notice has no words of its own; `gift_text` says what the
+        // headline does not.
+        text: gift_text(msg, kind).as_deref().unwrap_or(&msg.content).chars().take(MAX_TEXT).collect(),
         parts: parts_for(&msg.segments),
         kind,
         reply_parent_id: msg.tags.get("reply-parent-msg-id").cloned(),
@@ -1004,12 +1004,31 @@ fn anonymous_gift(msg: &ChatMessage) -> bool {
         || msg.username.eq_ignore_ascii_case("ananonymousgifter")
 }
 
-/// A gift entry's words: the platform's own sentence, when the row has one.
-fn gift_text(msg: &ChatMessage, kind: MentionKind) -> Option<&str> {
+/// A gift entry's words: what the headline ("Gifter gifted you a sub in
+/// maefae") does not say already. The tier, then whatever Twitch's sentence
+/// adds after its first one ("They have given 5 Gift Subs in the channel!").
+/// The first sentence is the gift again in the third person, so it is left out.
+fn gift_text(msg: &ChatMessage, kind: MentionKind) -> Option<String> {
     if kind != MentionKind::Gift {
         return None;
     }
-    msg.metadata.system_message.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    let tier = match msg.tags.get("msg-param-sub-plan").map(String::as_str) {
+        Some("1000") => "A Tier 1 sub.",
+        Some("2000") => "A Tier 2 sub.",
+        Some("3000") => "A Tier 3 sub.",
+        _ => "A gifted sub.",
+    };
+    let rest = msg
+        .metadata
+        .system_message
+        .as_deref()
+        .and_then(|s| s.split_once("! "))
+        .map(|(_, rest)| rest.trim())
+        .filter(|r| !r.is_empty());
+    Some(match rest {
+        Some(rest) => format!("{tier} {rest}"),
+        None => tier.to_string(),
+    })
 }
 
 /// A reply's parent words: from the parsed reply (Twitch, its history
