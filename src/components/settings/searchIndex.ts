@@ -1287,6 +1287,26 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
+    section: 'Chat Placement',
+    title: 'Vertical screens',
+    description: 'When the window is taller than it is wide, only the video and chat stay on screen: the video fills the width and chat fills the space underneath. Vertical mode, portrait monitor, rotated screen, chat under video, stacked layout.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Placement',
+    title: 'Hide title bar',
+    parent: 'Vertical screens',
+    description: 'In the vertical layout, tuck the title bar away until you move to the top edge. Clean, distraction free.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Placement',
+    title: 'Hide sidebar',
+    parent: 'Vertical screens',
+    description: 'In the vertical layout, tuck the sidebar away until you move to the left edge. Clean, distraction free.'
+  },
+  {
+    tab: 'Chat',
     section: 'Full Screen Chat',
     title: 'Full Screen Chat',
     description: 'Bring chat up over the player\'s full screen without leaving it: the chat button in the player\'s controls, or C. Chat floats over the video as a translucent column. Previously "Fullscreen Chat", "Overlay", "Chat over fullscreen video".'

@@ -1712,6 +1712,16 @@ export interface Settings {
   // When chat_placement is 'left' or 'right', hide the docked chat and reveal it
   // on hover toward that edge (it slides in and the player flexes to make room).
   chat_auto_hide?: boolean;
+  // Vertical screens: while the window is taller than it is wide, the player
+  // runs the full width at 16:9 and chat fills the space under it, whatever
+  // chat_placement says (unless that is 'hidden'). Off unless chosen. While
+  // that layout is on, the title bar and the sidebar tuck away and come back
+  // on hover, unless switched off here (both default on).
+  vertical_screens?: {
+    enabled?: boolean;
+    hide_title_bar?: boolean;
+    hide_sidebar?: boolean;
+  };
   // Chat brought up over the video in the player's full screen (the chat
   // button or C). Same WebView, no second window: the docked chat panel is
   // lifted above Plyr's fullscreen layer as a translucent column.
