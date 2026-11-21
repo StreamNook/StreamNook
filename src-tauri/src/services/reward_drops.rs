@@ -117,9 +117,55 @@ pub fn first_reward_image(drops: &[TimeBasedDrop]) -> String {
         .iter()
         .flat_map(|d| &d.benefit_edges)
         .map(|b| b.image_url.as_str())
-        .find(|u| !u.is_empty())
+        .find(|u| !u.is_empty() && !is_placeholder_art(u))
         .unwrap_or_default()
         .to_string()
+}
+
+/// Twitch's stand-in art for a reward with none of its own (a sword on grey):
+/// `twitch-quests-assets/REWARD/default.png`. GTAVI's GTA DVD Chest wears it.
+pub fn is_placeholder_art(url: &str) -> bool {
+    url.contains("twitch-quests-assets/REWARD/default")
+}
+
+/// A reward still wearing Twitch's stand-in art shows what it gives next (the
+/// chest shows its next chain), else the first real reward of its draw, else
+/// the campaign's art. Every surface reads the drop's own image, so this is the
+/// one place it is decided.
+fn unplaceholder(drops: &mut [TimeBasedDrop], campaign_art: &str) {
+    for d in drops.iter_mut() {
+        let next = d.next_reward.as_ref().map(|r| r.image_url.clone()).filter(|u| !u.is_empty() && !is_placeholder_art(u));
+        let pool = d.pool_rewards.iter().map(|r| r.image_url.clone()).find(|u| !u.is_empty() && !is_placeholder_art(u));
+        let stand_in = next.or(pool).unwrap_or_else(|| campaign_art.to_string());
+        for b in d.benefit_edges.iter_mut().filter(|b| is_placeholder_art(&b.image_url)) {
+            b.image_url = stand_in.clone();
+        }
+    }
+}
+
+/// The one category every tier of a campaign counts in, as that campaign's
+/// group, when Twitch lists the campaign itself with no game. None when the
+/// tiers name no category, or several (a campaign for many games keeps its
+/// own art and name).
+fn tier_category(detail: &Value) -> Option<DisplayGroup> {
+    let mut found: Option<&Value> = None;
+    for g in detail["rewardGroups"].as_array().into_iter().flatten() {
+        for cat in g["progressCriteria"]["categories"].as_array().into_iter().flatten() {
+            let id = text(cat, "id")?;
+            match found {
+                Some(f) if text(f, "id") != Some(id) => return None,
+                Some(_) => {}
+                None => found = Some(cat),
+            }
+        }
+    }
+    let cat = found?;
+    Some(DisplayGroup {
+        game_id: text(cat, "id")?.to_string(),
+        game_name: text(cat, "displayName")?.to_string(),
+        image_url: text(cat, "boxArtURL").unwrap_or_default().to_string(),
+        has_category: true,
+    })
 }
 
 fn parse_time(v: &Value) -> Option<DateTime<Utc>> {
@@ -485,9 +531,13 @@ pub fn build(
             continue;
         }
         let name = text(item, "name").unwrap_or(id);
-        let group = display_group(item).filter(|g| g.has_category).unwrap_or_else(|| {
-            no_category_group(text(item, "brand").unwrap_or(name))
-        });
+        // A campaign Twitch lists without a game (GTAVI's) whose tiers all count
+        // in one category is that category's: its name and box art, not the
+        // campaign's own art (Twitch's heist logo, or its default sword).
+        let group = display_group(item)
+            .filter(|g| g.has_category)
+            .or_else(|| tier_category(detail))
+            .unwrap_or_else(|| no_category_group(text(item, "brand").unwrap_or(name)));
 
         let mut drops: Vec<TimeBasedDrop> = detail["rewardGroups"]
             .as_array()
@@ -511,9 +561,11 @@ pub fn build(
             group.image_url.clone()
         } else {
             text(detail, "imageURL")
+                .filter(|u| !is_placeholder_art(u))
                 .map(str::to_string)
                 .unwrap_or_else(|| first_reward_image(&drops))
         };
+        unplaceholder(&mut drops, &image_url);
         firsts.push(first_tier);
         // Where it counts: every category any tier names, in Twitch's order.
         let mut category_ids: Vec<String> = Vec::new();
@@ -646,7 +698,7 @@ pub(crate) fn detail_chunks(count: usize) -> Vec<std::ops::Range<usize>> {
 /// (unaliased, so free under the cap; `merge_details` keeps the first).
 pub(crate) fn details_query(count: usize) -> String {
     let group = format!(
-        "rewardGroups {{ id name track lane progressCriteria {{ requirementType requirements {{ minutesWatched subs }} repeatableConfig {{ repeatableTimes }} categories {{ id }} }} {SELF_FIELDS} rewards {{ id name thumbnailURL pool {{ rewards {{ id name thumbnailURL distributionType }} }} }} }}"
+        "rewardGroups {{ id name track lane progressCriteria {{ requirementType requirements {{ minutesWatched subs }} repeatableConfig {{ repeatableTimes }} categories {{ id displayName boxArtURL }} }} {SELF_FIELDS} rewards {{ id name thumbnailURL pool {{ rewards {{ id name thumbnailURL distributionType }} }} }} }}"
     );
     let vars: Vec<String> = (0..count).map(|i| format!("$id{i}: ID!")).collect();
     let fields: Vec<String> = (0..count)
@@ -1204,6 +1256,45 @@ mod tests {
         // A pool of one over three days (the Poké Ball) is no ladder.
         let ball = built(json!({ "status": "IN_PROGRESS", "currentMinutesWatched": 20, "grantCount": 1 }), json!([]));
         assert!(ball[0].time_based_drops[0].next_reward.is_none());
+    }
+
+    #[test]
+    fn a_gameless_campaign_counting_in_one_category_is_that_categorys_and_never_wears_the_sword() {
+        // GTAVI as Twitch lists it (2026-11-21): no game on the campaign, its own
+        // art Twitch's heist logo, the chest on Twitch's default sword, every
+        // tier counting in Grand Theft Auto VI.
+        let chains = ["Purple Chain", "Bronze Chain"];
+        let list = vec![json!({ "id": "gtavi", "name": "GTAVI Launch Celebration", "brand": "Rockstar Games",
+                                "startsAt": "2026-09-20T11:00:00Z", "endsAt": "2026-10-01T07:59:59Z", "game": null })];
+        let gta = json!([{ "id": "1867279146", "displayName": "Grand Theft Auto VI", "boxArtURL": "https://box/gta6-285x380.jpg" }]);
+        let details = |categories: Value| {
+            json!({
+                "c0": { "id": "gtavi", "imageURL": "https://static-cdn.jtvnw.net/twilight-static-assets/heist-train-glitch.png", "rewardGroups": [
+                    { "id": "g-dvd", "name": "GTA DVD Drops",
+                      "progressCriteria": { "requirementType": "WATCH", "requirements": { "minutesWatched": 60, "subs": null },
+                                            "repeatableConfig": { "repeatableTimes": 2 }, "categories": categories },
+                      "self": { "status": "IN_PROGRESS", "currentMinutesWatched": 60, "grantCount": 1, "hasPreconditionsMet": true },
+                      "rewards": [ { "id": "chest", "name": "GTA DVD Chest",
+                                     "thumbnailURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/default.png",
+                                     "pool": pool(&chains) } ] }
+                ] },
+                "currentUser": { "id": "u1", "inventory": { "viewerRewardDropCampaignsInProgress": [] } }
+            })
+        };
+        let c = build(&list, &details(gta.clone()), &mut HashMap::new(), now());
+        assert_eq!((c[0].game_id.as_str(), c[0].game_name.as_str()), ("1867279146", "Grand Theft Auto VI"));
+        assert_eq!(c[0].image_url, "https://box/gta6-285x380.jpg");
+        // The chest shows the chain it gives next, never the sword.
+        let chest = &c[0].time_based_drops[0].benefit_edges[0];
+        assert_eq!(chest.name, "GTA DVD Chest");
+        assert_eq!(chest.image_url, "https://art/Bronze Chain.png");
+        // Tiers in two categories, or none: the campaign keeps its own name and art.
+        let two = json!([gta[0].clone(), { "id": "2", "displayName": "Other", "boxArtURL": "b" }]);
+        let mixed = build(&list, &details(two), &mut HashMap::new(), now());
+        assert_eq!(mixed[0].game_name, "Rockstar Games");
+        assert!(mixed[0].image_url.ends_with("heist-train-glitch.png"));
+        assert!(is_placeholder_art("https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/default.png"));
+        assert!(!is_placeholder_art("https://art/Bronze Chain.png"));
     }
 
     #[test]
