@@ -4727,7 +4727,9 @@ html[data-motion="reduced"] .sub-progress-fill {
 }
 
 /* The hype train bar (HypeTrainBanner): a flat glaze card with a level row
-   over an inset track, the train riding the fill's leading edge. */
+   over an inset track, the train riding the fill's leading edge. A train's
+   look (utils/hypeTrainLook.ts) is the card's data-look: each look past the
+   standard one restyles the pieces below under its own selector. */
 
 /* What the next level needs, as a quiet chip: a recess in the card like the
    track, the bits gem and sub star with their counts, a hairline between. */
@@ -4753,7 +4755,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   box-shadow: none;
   transition: color 1s linear;
 }
-.hype-train-card[data-golden] .hype-train-clock {
+.hype-train-card[data-look='golden'] .hype-train-clock {
   --hype-clock-base: #ffd700;
 }
 .hype-train-clock-line {
@@ -4790,7 +4792,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   opacity: 0.5;
   transition: clip-path 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.hype-train-card[data-golden] .hype-train-meter-glow {
+.hype-train-card[data-look='golden'] .hype-train-meter-glow {
   background: linear-gradient(90deg, #d4a017, #ffd700 60%, #fff1b8);
 }
 
@@ -4829,7 +4831,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   transform: scaleX(-1);
   filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.7)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
 }
-.hype-train-card[data-golden] .hype-train-rider {
+.hype-train-card[data-look='golden'] .hype-train-rider {
   color: #fff4c4;
 }
 
@@ -4854,7 +4856,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   );
   animation: hype-train-flash 1.6s ease-in-out infinite;
 }
-.hype-train-card[data-golden] .hype-train-flash {
+.hype-train-card[data-look='golden'] .hype-train-flash {
   background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0 18%, rgba(255, 215, 0, 0.6) 40%, transparent 70%);
 }
 @keyframes hype-train-flash {
@@ -4886,7 +4888,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   transform-origin: right center;
   animation: hype-train-comet 0.9s ease-in-out infinite;
 }
-.hype-train-card[data-golden] .hype-train-comet {
+.hype-train-card[data-look='golden'] .hype-train-comet {
   background: linear-gradient(to left, rgba(255, 255, 255, 0.95), rgba(255, 215, 0, 0.7) 30%, transparent);
 }
 @keyframes hype-train-comet {
@@ -4973,7 +4975,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   background-clip: text;
   color: transparent;
 }
-.hype-train-card[data-golden] .hype-train-words-lead {
+.hype-train-card[data-look='golden'] .hype-train-words-lead {
   background-image: linear-gradient(90deg, #ffd700, #e6a800);
 }
 

@@ -2340,6 +2340,7 @@ export const WatchScreen: React.FC = () => {
                 <HypeTrainBanner
                   train={currentHypeTrain}
                   floating
+                  compact
                   onLevelUp={throwHypeConfetti}
                   onExpire={() => useAppStore.getState().setCurrentHypeTrain(null)}
                 />
