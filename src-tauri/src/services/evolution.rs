@@ -18,16 +18,17 @@
 //! from (`evolution_order`), with Twitch's order kept only where that is unknown.
 
 use crate::models::drops::{DropCampaign, TimeBasedDrop};
+use crate::services::badge_standing::CatalogueBadge;
 use crate::services::drops_overview::badge_key;
 use crate::services::reward_drops::TrackGroup;
 use anyhow::{anyhow, Result};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const SELECTIONS_QUERY: &str =
     "query ProgressionTrackSelections($tracks: [ID!]!) { trackSelections(tracks: $tracks) { id track lane } }";
@@ -254,7 +255,8 @@ const LOCKED_BADGES_SECS: u64 = 120;
 static LOCKED_BADGES: Lazy<Mutex<Option<(Instant, BadgeIndex)>>> = Lazy::new(|| Mutex::new(None));
 
 /// `locked_from` for the signed-in Drops account, from the second drops list
-/// as last read (no request of its own). Empty when nothing is evolving.
+/// as last read (no Twitch request of its own; a stage's unknown base is looked
+/// up on badgebase, see `badge_index`). Empty when nothing is evolving.
 pub async fn locked_stages(app: &crate::rt::AppHandle) -> HashMap<String, String> {
     let groups = crate::services::reward_drops::track_groups();
     if !groups.iter().any(|g| g.lane.is_some()) {
@@ -268,7 +270,7 @@ pub async fn locked_stages(app: &crate::rt::AppHandle) -> HashMap<String, String
     let badges = match fresh {
         Some(b) => b,
         None => {
-            let b = badge_index(app).await;
+            let b = badge_index(app, &campaigns, &groups).await;
             if let Ok(mut c) = LOCKED_BADGES.lock() {
                 *c = Some((Instant::now(), b.clone()));
             }
@@ -421,18 +423,100 @@ fn stage(drop: &TimeBasedDrop, badges: &BadgeIndex) -> EvolutionStage {
     }
 }
 
-/// The global badges the board reads, with what this account holds.
-async fn badge_index(app: &crate::rt::AppHandle) -> BadgeIndex {
+/// The catalogue badges of every evolution stage whose base the badge copy
+/// does not name yet, one per stage title. A stage the catalogue does not list
+/// cannot be looked up and is left out. Pure.
+pub(crate) fn stages_without_base<'a>(
+    campaigns: &[DropCampaign],
+    groups: &[TrackGroup],
+    badges: &BadgeIndex,
+    catalogue: &'a [CatalogueBadge],
+) -> Vec<&'a CatalogueBadge> {
+    let lane_groups: HashSet<&str> =
+        groups.iter().filter(|g| g.lane.is_some()).map(|g| g.group_id.as_str()).collect();
+    let mut wanted: HashSet<String> = campaigns
+        .iter()
+        .flat_map(|c| c.time_based_drops.iter())
+        .filter(|d| lane_groups.contains(d.id.as_str()))
+        .map(|d| badge_key(&stage_title(d)))
+        .filter(|k| !badges.base_of.contains_key(k))
+        .collect();
+    catalogue.iter().filter(|b| wanted.remove(&badge_key(&b.title))).collect()
+}
+
+/// When each badge's base was last looked up, so a page that names none, or
+/// does not answer, is asked again only after `BASE_LOOKUP_RETRY_SECS`.
+static BASE_LOOKUPS: Lazy<Mutex<HashMap<String, Instant>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+const BASE_LOOKUP_RETRY_SECS: u64 = 60 * 60;
+/// The board and Autopilot's settings push wait at most this long for them.
+const BASE_LOOKUP_DEADLINE: Duration = Duration::from_secs(15);
+
+/// Looks up what each of `stages` evolves from (`learn_evolves_from`), all at
+/// once, the ones not tried lately. True when at least one was learned.
+async fn learn_bases(stages: Vec<CatalogueBadge>) -> bool {
+    let due: Vec<CatalogueBadge> = {
+        let Ok(mut tried) = BASE_LOOKUPS.lock() else { return false };
+        stages
+            .into_iter()
+            .filter(|b| {
+                let fresh = tried.get(&b.key()).is_some_and(|at| at.elapsed().as_secs() < BASE_LOOKUP_RETRY_SECS);
+                if !fresh {
+                    tried.insert(b.key(), Instant::now());
+                }
+                !fresh
+            })
+            .collect()
+    };
+    if due.is_empty() {
+        return false;
+    }
+    let lookups = due
+        .iter()
+        .map(|b| crate::commands::badge_metadata::learn_evolves_from(&b.set_id, &b.version));
+    match tokio::time::timeout(BASE_LOOKUP_DEADLINE, futures::future::join_all(lookups)).await {
+        Ok(found) => {
+            let learned: Vec<String> = due
+                .iter()
+                .zip(found)
+                .filter_map(|(b, base)| base.map(|base| format!("{} from {}", b.title, base)))
+                .collect();
+            if !learned.is_empty() {
+                info!("[Evolution] learned what evolves from what: {}", learned.join(", "));
+            }
+            !learned.is_empty()
+        }
+        Err(_) => {
+            warn!("[Evolution] looking up {} evolution bases took too long", due.len());
+            // Whatever answered in time is already kept; read it back.
+            true
+        }
+    }
+}
+
+/// The global badges the board reads, with what this account holds. A stage
+/// whose base the badge copy does not name is looked up first, since an
+/// unknown base leaves the line open to Autopilot and Missing badges.
+async fn badge_index(app: &crate::rt::AppHandle, campaigns: &[DropCampaign], groups: &[TrackGroup]) -> BadgeIndex {
     let owned: HashSet<String> = crate::services::badge_standing::get_standing(app, false)
         .await
         .owned
         .into_iter()
         .collect();
-    let catalogue = crate::services::badge_standing::load_catalogue().await;
+    let catalogue = std::sync::Arc::new(crate::services::badge_standing::load_catalogue().await);
+    let index = index_of(owned.clone(), catalogue.clone()).await;
+    let missing: Vec<CatalogueBadge> =
+        stages_without_base(campaigns, groups, &index, &catalogue).into_iter().cloned().collect();
+    if missing.is_empty() || !learn_bases(missing).await {
+        return index;
+    }
+    index_of(owned, catalogue).await
+}
+
+async fn index_of(owned: HashSet<String>, catalogue: std::sync::Arc<Vec<CatalogueBadge>>) -> BadgeIndex {
     tokio::task::spawn_blocking(move || {
         let metadata = crate::services::badge_standing::load_metadata(&catalogue);
         let mut index = BadgeIndex::default();
-        for b in &catalogue {
+        for b in catalogue.iter() {
             let key = badge_key(&b.title);
             let held = owned.contains(&b.key());
             let entry = index
@@ -545,7 +629,7 @@ pub async fn board(app: &crate::rt::AppHandle, force: bool) -> EvolutionBoard {
         };
         (campaigns, groups, selected)
     };
-    let badges = badge_index(app).await;
+    let badges = badge_index(app, &campaigns, &groups).await;
     let closed = state.settings.lock().map(|s| s.evolution_closed.clone()).unwrap_or_default();
     without_closed(
         build_board(&campaigns, &groups, &selected, &badges, chrono::Utc::now().timestamp_millis()),
@@ -716,6 +800,39 @@ mod tests {
         let pichu = &b.tracks[0].lanes[1];
         assert_eq!(pichu.blocked_by.as_deref(), Some("Pichu"));
         assert!(!pichu.can_equip);
+    }
+
+    #[test]
+    fn a_stage_with_no_known_base_is_looked_up_once() {
+        let campaigns = vec![campaign(vec![
+            stage_drop("g-haunter", "Haunter", Value::Null),
+            stage_drop("g-charmeleon", "Charmeleon", Value::Null),
+            stage_drop("g-mew", "Mew", Value::Null),
+            stage_drop("g-ball", "Pokémon Night Out Themed Poke Ball", Value::Null),
+        ])];
+        let groups = vec![
+            group("g-haunter", Some("lane-gastly")),
+            group("g-charmeleon", Some("lane-charmander")),
+            group("g-mew", Some("lane-mew")),
+            group("g-ball", None),
+        ];
+        let badge = |set: &str, version: &str, title: &str| CatalogueBadge {
+            set_id: set.into(),
+            version: version.into(),
+            title: title.into(),
+            image_url: String::new(),
+        };
+        let catalogue = vec![
+            badge("haunter", "1", "Haunter"),
+            badge("charmeleon", "1", "Charmeleon"),
+            badge("charmeleon", "2", "Charmeleon"),
+            badge("night-out-ball", "1", "Pokémon Night Out Themed Poke Ball"),
+        ];
+        // Haunter's base is known, Mew is not in the catalogue, the ball has
+        // no lane, and Charmeleon is asked for once, not per version.
+        let asked: Vec<String> =
+            stages_without_base(&campaigns, &groups, &index(&[]), &catalogue).iter().map(|b| b.key()).collect();
+        assert_eq!(asked, vec!["charmeleon/1".to_string()]);
     }
 
     #[test]

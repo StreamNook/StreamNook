@@ -176,8 +176,10 @@ impl HostInner {
         // The locks come from the second drops list, read first when stale:
         // on a plugin's start it usually has not been read yet.
         self.freshen_second_list().await;
-        let evolution_bases = crate::services::evolution::evolution_bases().await;
+        // The locks first: reading them looks up any stage's unknown base,
+        // which the line order below then reads too.
         let evolution_locked = crate::services::evolution::locked_stages(&self.app).await;
+        let evolution_bases = crate::services::evolution::evolution_bases().await;
         if let Ok(mut sent) = SENT_LOCKED.lock() {
             *sent = Some(evolution_locked.clone());
         }

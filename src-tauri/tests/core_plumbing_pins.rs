@@ -404,8 +404,10 @@ fn the_drops_push_is_serialized_and_carries_session_and_generation() {
         &push,
         &[
             "let _push = self.push_lock.lock().await;",
-            "crate::services::evolution::evolution_bases().await;",
+            // Locks first: reading them looks up unknown evolution bases,
+            // which the line order read next then sees.
             "crate::services::evolution::locked_stages(&self.app).await;",
+            "crate::services::evolution::evolution_bases().await;",
             "state.drops_service.lock().await.get_settings().await;",
             "let generation = self.push_generation.fetch_add(1, Ordering::AcqRel) + 1;",
             "\"host_session\": host_session_id(),",

@@ -323,48 +323,12 @@ pub async fn fetch_badge_metadata(
         debug!("[BadgeMetadata] Force refresh requested for: {}", cache_key);
     }
 
-    debug!("[BadgeMetadata] Fetching info from: {}", url);
-
-    // Fetch the HTML page. Shared client; the browser user agent rides on the
-    // request, and there was never a deadline on this fetch.
-    let response = crate::services::http::client_unbounded()
-        .get(&url)
-        .header(
-            reqwest::header::USER_AGENT,
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch badge metadata page: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Badge metadata source returned status: {}",
-            response.status()
-        ));
-    }
-
-    let html_content = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    // Parse the HTML and extract data in a separate scope
-    let (date_added, usage_stats, more_info) = {
-        let document = Html::parse_document(&html_content);
-        let date_added = extract_date_added(&document);
-        let usage_stats = extract_usage_stats(&document);
-        let more_info = extract_more_info(&document);
-        (date_added, usage_stats, more_info)
-    }; // document is dropped here
-
-    // Create cached version without URL
-    let cached_info = BadgeMetadataCached {
-        date_added: date_added.clone(),
-        usage_stats: usage_stats.clone(),
-        more_info: more_info.clone(),
-        enrichment: None,
-    };
+    let cached_info = scrape_badgebase(&url).await?;
+    let (date_added, usage_stats, more_info) = (
+        cached_info.date_added.clone(),
+        cached_info.usage_stats.clone(),
+        cached_info.more_info.clone(),
+    );
 
     // Cache the result permanently (expiry_days = 0 means never expire)
     if let Ok(json_value) = serde_json::to_value(&cached_info) {
@@ -387,6 +351,98 @@ pub async fn fetch_badge_metadata(
         enrichment: None,
         info_url: url,
     })
+}
+
+/// What badgebase's page at `url` says about a badge, in the shape it is
+/// cached in (no enrichment).
+async fn scrape_badgebase(url: &str) -> Result<BadgeMetadataCached, String> {
+    debug!("[BadgeMetadata] Fetching info from: {}", url);
+
+    // Fetch the HTML page. Shared client; the browser user agent rides on the
+    // request. Callers that cannot wait put their own deadline around it.
+    let response = crate::services::http::client_unbounded()
+        .get(url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch badge metadata page: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Badge metadata source returned status: {}",
+            response.status()
+        ));
+    }
+
+    let html_content = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    let document = Html::parse_document(&html_content);
+    Ok(BadgeMetadataCached {
+        date_added: extract_date_added(&document),
+        usage_stats: extract_usage_stats(&document),
+        more_info: extract_more_info(&document),
+        enrichment: None,
+    })
+}
+
+/// The copy to keep once badgebase has named the badge a Pokémon evolves
+/// from: a relay copy keeps its own words and gains `enrichment.evolves_from`
+/// (its prose rewrote badgebase's sentence away), anything else is replaced
+/// by the scraped copy. With the cache source to keep it under. Pure.
+fn with_evolves_from(
+    kept: Option<(BadgeMetadataCached, String)>,
+    scraped: BadgeMetadataCached,
+    base: &str,
+) -> (BadgeMetadataCached, String) {
+    match kept {
+        Some((mut relay, source)) if source == ENRICHMENT_SOURCE => {
+            let mut enrichment = relay
+                .enrichment
+                .take()
+                .filter(serde_json::Value::is_object)
+                .unwrap_or_else(|| serde_json::json!({}));
+            enrichment["evolves_from"] = serde_json::Value::String(base.to_string());
+            relay.enrichment = Some(enrichment);
+            (relay, source)
+        }
+        _ => (scraped, "badgebase".to_string()),
+    }
+}
+
+/// What a Pokémon badge evolves from, read off badgebase ("Charmeleon is an
+/// evolved form of the Charmander global chat badge") and kept with the
+/// badge's cached copy, so every surface knows it from then on. The relay
+/// feed carries it only for the newest drops, so an install that missed the
+/// evolutions' push never learned it otherwise. `None` when the page names no
+/// base or cannot be read.
+pub async fn learn_evolves_from(badge_set_id: &str, badge_version: &str) -> Option<String> {
+    let url = format!("https://badgebase.co/badges/{}-v{}/", badge_set_id, badge_version);
+    let scraped = match scrape_badgebase(&url).await {
+        Ok(s) => s,
+        Err(e) => {
+            debug!("[BadgeMetadata] no base for {}-v{}: {}", badge_set_id, badge_version, e);
+            return None;
+        }
+    };
+    let base = crate::services::badge_earn::evolves_from(None, scraped.more_info.as_deref())?;
+    let cache_key = format!("metadata:{}-v{}", badge_set_id, badge_version);
+    let kept = match get_cached_item(CacheType::Badge, &cache_key).await {
+        Ok(Some(c)) => serde_json::from_value::<BadgeMetadataCached>(c.data)
+            .ok()
+            .map(|m| (m, c.metadata.source)),
+        _ => None,
+    };
+    let (copy, source) = with_evolves_from(kept, scraped, &base);
+    if let Ok(json_value) = serde_json::to_value(&copy) {
+        let _ = cache_item(CacheType::Badge, cache_key, json_value, source, 0).await;
+    }
+    Some(base)
 }
 
 /// Compose the badge More Info fields from a relay-pushed `enrichment` object
@@ -757,6 +813,38 @@ mod tests {
     use serde_json::json;
 
     const RANGE: &str = "2026-10-20T19:00:00Z - 2026-11-03T07:59:00Z";
+
+    fn copy(more_info: &str, enrichment: Option<serde_json::Value>) -> BadgeMetadataCached {
+        BadgeMetadataCached {
+            date_added: None,
+            usage_stats: None,
+            more_info: Some(more_info.to_string()),
+            enrichment,
+        }
+    }
+
+    #[test]
+    fn a_learned_base_joins_the_relay_copy_and_replaces_any_other() {
+        use crate::services::badge_earn::evolves_from;
+        let scraped = copy("Charmeleon is an evolved form of the Charmander global chat badge.", None);
+
+        // The relay's words stay; only the base is added, where it is read first.
+        let relay = copy("Charmeleon is what Charmander becomes.", Some(json!({ "campaign": "Evolving Pokémon" })));
+        let (kept, source) =
+            with_evolves_from(Some((relay, ENRICHMENT_SOURCE.to_string())), scraped.clone(), "Charmander");
+        assert_eq!(source, ENRICHMENT_SOURCE);
+        assert_eq!(kept.more_info.as_deref(), Some("Charmeleon is what Charmander becomes."));
+        let enrichment = kept.enrichment.expect("relay enrichment kept");
+        assert_eq!(enrichment["campaign"], "Evolving Pokémon");
+        assert_eq!(evolves_from(Some(&enrichment), kept.more_info.as_deref()).as_deref(), Some("Charmander"));
+
+        // An older scrape, or nothing cached, takes the fresh scrape.
+        for kept in [Some((copy("Older words.", None), "badgebase".to_string())), None] {
+            let (copy, source) = with_evolves_from(kept, scraped.clone(), "Charmander");
+            assert_eq!(source, "badgebase");
+            assert_eq!(evolves_from(copy.enrichment.as_ref(), copy.more_info.as_deref()).as_deref(), Some("Charmander"));
+        }
+    }
 
     #[test]
     fn the_campaign_window_wins_over_date_info() {
