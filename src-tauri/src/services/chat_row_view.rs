@@ -397,6 +397,13 @@ fn twitch_badge_art(room_id: Option<&str>, set: &str, version: &str) -> Option<(
     }
 }
 
+/// Twitch's gift sub art (the Sub Gifter badge, as gift notices lead with),
+/// for marks like the hype train's "subs to go". None until the global badge
+/// set is known.
+pub fn gift_sub_art() -> Option<String> {
+    twitch_badge_art(None, "sub-gifter", "1").map(|(url, _)| url)
+}
+
 /// A badge's art from one room's own set (its channel badges, or its FFZ
 /// moderator and VIP art), never the global set: what a Shared Chat partner
 /// row carries so every renderer draws the partner channel's badges.
@@ -1573,7 +1580,7 @@ pub fn stamp_view(msg: &mut ChatMessage) {
 /// draws it: Twitch's gift art (the Sub Gifter badge), except for a Prime sub,
 /// which leads with Twitch's Prime crown the shell draws itself.
 fn event_art(msg: &ChatMessage) -> Option<String> {
-    leads_with_gift_art(msg).then(|| twitch_badge_art(None, "sub-gifter", "1").map(|(url, _)| url)).flatten()
+    leads_with_gift_art(msg).then(gift_sub_art).flatten()
 }
 
 /// A Twitch subscription or gift notice that is not a Prime sub.

@@ -3541,6 +3541,9 @@ export interface HypeTrainData {
   started_at: string;
   expires_at: string;
   is_golden_kappa?: boolean;
+  /** Twitch's gift sub art (the Sub Gifter badge), from Rust's watch; the
+   *  iPhone's subs mark. Desktop and Android read their own badge cache. */
+  gift_art?: string | null;
 }
 
 /** A chatter's sub in a channel, with its words. Mirrors `SubStanding` in

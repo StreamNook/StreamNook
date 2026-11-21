@@ -175,6 +175,8 @@ async fn poll(app: AppHandle, key: String, channel_id: Option<String>) {
                                 "started_at": status.started_at.clone().unwrap_or_default(),
                                 "expires_at": status.expires_at.clone().unwrap_or_default(),
                                 "is_golden_kappa": status.is_golden_kappa,
+                                // The subs mark's art (the iPhone has no badge cache of its own).
+                                "gift_art": crate::services::chat_row_view::gift_sub_art(),
                             },
                         }),
                     );
