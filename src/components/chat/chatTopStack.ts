@@ -13,18 +13,57 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 
-export type StackKind = 'prediction' | 'poll' | 'drop';
+/** The seven cards of the stack (SN-284), in Rust's order. The poll, prediction
+ *  and drop cards report themselves; the others are reported by their host
+ *  through `control[kind].onPresence`. */
+export type StackKind =
+  | 'hype'
+  | 'prediction'
+  | 'poll'
+  | 'drop'
+  | 'channel_pin'
+  | 'mention_context'
+  | 'mention_pins';
+
+/** How Rust says a card is drawn (`Form` in services/chat_top_stack.rs). */
+export type StackForm = 'strip' | 'open' | 'folded' | 'floor' | 'full' | 'count_line';
 
 export interface StackSlot {
   kind: StackKind;
   open: boolean;
+  form: StackForm;
+  /** The height this card takes, whole pixels; 0 when folded. */
+  height: number;
+  /** `count_line` only: how many cards folded into it. */
+  more_cards?: number;
+}
+
+/** The "N more cards" strip: the cards folded into it, lowest rank last. */
+export interface StackMore {
+  count: number;
+  kinds: StackKind[];
+  height: number;
 }
 
 export interface StackLayout {
-  /** Top to bottom. */
+  /** Top to bottom, every card present (folded ones included, by their form). */
   slots: StackSlot[];
   /** The most height the whole stack may take, 0 while the column is unmeasured. */
   max_height: number;
+  /** The "N more cards" strip, drawn after the last slot, when cards folded. */
+  more?: StackMore;
+  /** What the whole stack takes, `more` included. */
+  height: number;
+  /** The key of the chat this surface shows (Rust's room key): the open and
+   *  folded choices are kept by it, so no shell builds a key of its own. */
+  room_key: string;
+}
+
+/** A card's last measured heights per form (`CardHeights` in Rust). */
+export interface CardHeights {
+  strip?: number;
+  open?: number;
+  line?: number;
 }
 
 /** `StackRequest` in services/chat_top_stack.rs. */
@@ -37,6 +76,15 @@ export interface StackRequest {
   opened: StackKind | null;
   folded: StackKind[];
   chat_height: number;
+  /** The channel's pinned message is open (the per-room open store). */
+  channel_pin_opened: boolean;
+  /** Each card's last measured heights, per form. */
+  heights: Partial<Record<StackKind, CardHeights>>;
+  /** The lower third: strips only, nothing opens, the pins show as their floor. */
+  strips_only: boolean;
+  /** The chat this surface shows, so the answer names its room key. */
+  provider: string | null;
+  channel: string | null;
 }
 
 /** What the host hands one card. */
@@ -45,6 +93,12 @@ export interface StackCardControl {
   placed: boolean;
   /** Open with its body, or its one-line strip. */
   open: boolean;
+  /** How Rust draws the card (strip, open, folded, floor, full, count line). */
+  form: StackForm | null;
+  /** The height Rust gave it, 0 until placed. */
+  height: number;
+  /** Cards folded into the pins' count line. */
+  moreCards: number;
   /** Its place top to bottom (a flex `order`). */
   order: number;
   /** The strip's or head's tap. */
@@ -57,7 +111,7 @@ export interface StackCardControl {
   onWaiting: (waiting: boolean) => void;
 }
 
-const KINDS: StackKind[] = ['prediction', 'poll', 'drop'];
+const KINDS: StackKind[] = ['hype', 'prediction', 'poll', 'drop', 'channel_pin', 'mention_context', 'mention_pins'];
 
 // A drag of the split handle or a fold resizes the column every frame; Rust is
 // asked once the size settles.
@@ -69,12 +123,12 @@ const RESIZE_SETTLE_MS = 150;
  * Opening one makes it the opened card, and the card it closes counts as
  * folded by the viewer, so it does not spring back open when this one folds.
  */
-export function toggleCard(
-  slots: StackSlot[],
+export function toggleCard<S extends { kind: StackKind; open: boolean }>(
+  slots: S[],
   opened: StackKind | null,
   folded: StackKind[],
   kind: StackKind,
-): { opened: StackKind | null; folded: StackKind[]; slots: StackSlot[] } {
+): { opened: StackKind | null; folded: StackKind[]; slots: S[] } {
   const isOpen = slots.some((s) => s.kind === kind && s.open);
   if (isOpen) {
     return {
@@ -91,11 +145,64 @@ export function toggleCard(
   };
 }
 
+/** The viewer's open and folded cards, kept per chat and per surface for the
+ *  session. The chat is named by the room key Rust answers with (never one a
+ *  shell builds); the phones key by room only, since the watch screen, the
+ *  Chats tab and the composer's menu share one choice by design. */
+const keptChoices = new Map<string, { opened: StackKind | null; folded: StackKind[] }>();
+export const choiceKey = (surface: string, roomKey: string, phone: boolean): string =>
+  phone ? roomKey : `${surface}|${roomKey}`;
+
+/** What the host tells the stack about the chat it sits in. */
+export interface ChatTopStackOptions {
+  /** The pin surface id: part of the open/folded key on the desktop. */
+  surface?: string;
+  /** The phone's one store is keyed by room only. */
+  phone?: boolean;
+  /** The chat this surface shows, so Rust answers with its room key. */
+  provider?: string | null;
+  channel?: string | null;
+  /** The lower third: strips only. */
+  stripsOnly?: boolean;
+  /** The channel's pinned message is open (every writer feeds this). */
+  channelPinOpened?: boolean;
+}
+
+const HEIGHT_SETTLE_MS = 150;
+
+/** What Rust's slot for `kind` says about the card: placed or not, open, its
+ *  form and height, and its place top to bottom. A card Rust has no slot for
+ *  (not reported, or folded away with the others) is not placed. */
+export function slotControl(
+  slots: readonly StackSlot[],
+  kind: StackKind,
+): Pick<StackCardControl, 'placed' | 'open' | 'form' | 'height' | 'moreCards' | 'order'> {
+  const at = slots.findIndex((s) => s.kind === kind);
+  return {
+    placed: at >= 0,
+    open: at >= 0 && slots[at].open,
+    form: at >= 0 ? slots[at].form : null,
+    height: at >= 0 ? slots[at].height : 0,
+    moreCards: at >= 0 ? (slots[at].more_cards ?? 0) : 0,
+    order: at >= 0 ? at : KINDS.length,
+  };
+}
+
 /** Lays out the stack in `column`, the chat column whose height caps it. */
-export function useChatTopStack(column: HTMLElement | null): {
+export function useChatTopStack(
+  column: HTMLElement | null,
+  options: ChatTopStackOptions = {},
+): {
   control: Record<StackKind, StackCardControl>;
   maxHeight: number;
+  /** What the whole stack takes, `more` included (0 until Rust answers). */
+  height: number;
+  /** The "N more cards" strip, when cards folded into it. */
+  more: StackMore | null;
+  /** A card reports the height it drew in a form; Rust is sent the last of each. */
+  measure: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
 } {
+  const { surface = '', phone = false, provider = null, channel = null, stripsOnly = false, channelPinOpened = false } = options;
   const order = useAppStore((s) => s.settings.chat_overlay_order) ?? 'prediction-first';
   const pollsStartCollapsed = useAppStore((s) => s.settings.chat_design?.polls_start_collapsed ?? false);
   const predictionsStartCollapsed = useAppStore(
@@ -109,8 +216,19 @@ export function useChatTopStack(column: HTMLElement | null): {
   const [folded, setFolded] = useState<StackKind[]>([]);
   const [height, setHeight] = useState(0);
   const [layout, setLayout] = useState<StackLayout | null>(null);
+  // Each card's last measured height per form, sent with every request.
+  const [measured, setMeasured] = useState<Partial<Record<StackKind, CardHeights>>>({});
+  const measuredRef = useRef(measured);
+  const measureTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(measureTimer.current), []);
   // Read by the tap handler, which stays one function for the hook's life.
   const layoutRef = useRef(layout);
+  const surfaceRef = useRef(surface);
+  const phoneRef = useRef(phone);
+  useEffect(() => {
+    surfaceRef.current = surface;
+    phoneRef.current = phone;
+  }, [surface, phone]);
   const openedRef = useRef(opened);
   const foldedRef = useRef(folded);
   useEffect(() => {
@@ -137,6 +255,18 @@ export function useChatTopStack(column: HTMLElement | null): {
 
   const cards = useMemo(() => KINDS.filter((k) => ids[k] != null), [ids]);
 
+  // The room Rust named: the open and folded choices of that chat come back
+  // when the surface moves to it, and are kept as the viewer makes them.
+  const roomKey = layout?.room_key ?? '';
+  const roomKeyRef = useRef('');
+  useEffect(() => {
+    if (!roomKey || roomKeyRef.current === roomKey) return;
+    roomKeyRef.current = roomKey;
+    const kept = keptChoices.get(choiceKey(surface, roomKey, phone));
+    setOpened(kept?.opened ?? null);
+    setFolded(kept?.folded ?? []);
+  }, [roomKey, surface, phone]);
+
   useEffect(() => {
     if (cards.length === 0) return;
     let live = true;
@@ -149,6 +279,11 @@ export function useChatTopStack(column: HTMLElement | null): {
       opened,
       folded,
       chat_height: height,
+      channel_pin_opened: channelPinOpened,
+      heights: measured,
+      strips_only: stripsOnly,
+      provider,
+      channel,
     };
     invoke<StackLayout>('chat_top_stack', { request })
       .then((next) => {
@@ -158,12 +293,41 @@ export function useChatTopStack(column: HTMLElement | null): {
         // Without an answer every card still shows and the viewer's own pick
         // still opens, so nothing is lost but the automatic open.
         Logger.debug('[ChatTopStack] layout failed:', err);
-        if (live) setLayout({ slots: cards.map((kind) => ({ kind, open: kind === opened })), max_height: 0 });
+        if (live) {
+          setLayout({
+            slots: cards.map((kind) => ({ kind, open: kind === opened, form: kind === opened ? 'open' : 'strip', height: 0 })),
+            max_height: 0,
+            height: 0,
+            room_key: '',
+          });
+        }
       });
     return () => {
       live = false;
     };
-  }, [cards, order, pollsStartCollapsed, predictionsStartCollapsed, predictionWaiting, opened, folded, height]);
+  }, [
+    cards,
+    order,
+    pollsStartCollapsed,
+    predictionsStartCollapsed,
+    predictionWaiting,
+    opened,
+    folded,
+    height,
+    channelPinOpened,
+    measured,
+    stripsOnly,
+    provider,
+    channel,
+  ]);
+
+  const measure = useCallback((kind: StackKind, form: 'strip' | 'open' | 'line', h: number) => {
+    const prev = measuredRef.current[kind]?.[form] ?? 0;
+    if (h <= 0 || Math.abs(prev - h) < 2) return;
+    measuredRef.current = { ...measuredRef.current, [kind]: { ...measuredRef.current[kind], [form]: h } };
+    clearTimeout(measureTimer.current);
+    measureTimer.current = setTimeout(() => setMeasured(measuredRef.current), HEIGHT_SETTLE_MS);
+  }, []);
 
   const report = useCallback((kind: StackKind, id: string | null) => {
     const prev = idsRef.current[kind] ?? null;
@@ -190,6 +354,8 @@ export function useChatTopStack(column: HTMLElement | null): {
     foldedRef.current = next.folded;
     setOpened(next.opened);
     setFolded(next.folded);
+    const key = roomKeyRef.current;
+    if (key) keptChoices.set(choiceKey(surfaceRef.current, key, phoneRef.current), { opened: next.opened, folded: next.folded });
     // Drawn at once rather than a round trip later; Rust's answer confirms it.
     setLayout((l) => l && { ...l, slots: next.slots });
   }, []);
@@ -217,13 +383,18 @@ export function useChatTopStack(column: HTMLElement | null): {
     const slots = layout?.slots ?? [];
     return Object.fromEntries(
       KINDS.map((k) => {
-        const at = slots.findIndex((s) => s.kind === k);
-        return [k, { placed: at >= 0, open: at >= 0 && slots[at].open, order: at >= 0 ? at : KINDS.length, ...handlers[k] }];
+        return [k, { ...slotControl(slots, k), ...handlers[k] }];
       }),
     ) as Record<StackKind, StackCardControl>;
   }, [layout, handlers]);
 
-  return { control, maxHeight: layout?.max_height ?? 0 };
+  return {
+    control,
+    maxHeight: layout?.max_height ?? 0,
+    height: layout?.height ?? 0,
+    more: layout?.more ?? null,
+    measure,
+  };
 }
 
 /** The space between two cards of the stack (ChatOverlayStack's gap), which a

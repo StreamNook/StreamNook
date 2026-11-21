@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { toggleCard } from './chatTopStack';
+import { choiceKey, slotControl, toggleCard, type StackLayout, type StackRequest } from './chatTopStack';
 
 // Hoisted above the import: the hook's modules need no app to load.
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -101,5 +101,62 @@ describe('accent on cards', () => {
     expect(src).not.toMatch(/bg-accent\//);
     expect(src).not.toMatch(/text-accent(?!-on-surface)/);
     expect(read('src/components/chat/OverlayBanner.tsx')).toContain('bg-accent-on-surface');
+  });
+});
+
+// The shared case file (SN-284, D21): Rust asserts every layout, and this shell
+// reads the same cases, so the request it sends and the answer it consumes
+// cannot drift from the rule.
+interface StackCase {
+  name: string;
+  request: Record<string, unknown>;
+  layout: StackLayout;
+}
+const cases = JSON.parse(read('src-tauri/tests/fixtures/chat-top-stack-cases.json')) as StackCase[];
+
+describe('chat top stack: the shared case file', () => {
+  it('has cases', () => {
+    expect(cases.length).toBeGreaterThan(0);
+  });
+
+  it('every request the cases make is one this shell can send, field for field', () => {
+    const fields = tsFields('StackRequest');
+    for (const c of cases) {
+      expect(Object.keys(c.request).sort(), c.name).toEqual(fields);
+      // typed: a request built from the case is a StackRequest
+      const typed: StackRequest = c.request as unknown as StackRequest;
+      expect(Array.isArray(typed.cards)).toBe(true);
+    }
+  });
+
+  it('every answer is consumed slot for slot: form, height and place', () => {
+    for (const c of cases) {
+      c.layout.slots.forEach((slot, i) => {
+        const control = slotControl(c.layout.slots, slot.kind);
+        expect(control.placed, `${c.name} ${slot.kind}`).toBe(true);
+        expect(control.open).toBe(slot.open);
+        expect(control.form).toBe(slot.form);
+        expect(control.height).toBe(slot.height);
+        expect(control.order).toBe(i);
+        expect(control.moreCards).toBe(slot.more_cards ?? 0);
+      });
+      // A card the answer does not name is not placed.
+      expect(slotControl([], 'poll').placed).toBe(false);
+    }
+  });
+
+  it('draws an open card that cannot fit its body as a strip (the answer says so)', () => {
+    const noRoom = cases.flatMap((c) => c.layout.slots).filter((s) => s.open && s.form === 'strip');
+    for (const slot of noRoom) {
+      const control = slotControl([slot], slot.kind);
+      expect(control.open).toBe(true);
+      expect(control.form).toBe('strip');
+    }
+  });
+
+  it('keeps the open and folded choice by the room key Rust named, and the phones by room only', () => {
+    expect(choiceKey('main-chat', 'xqc', false)).toBe('main-chat|xqc');
+    expect(choiceKey('dock', 'xqc', false)).not.toBe(choiceKey('main-chat', 'xqc', false));
+    expect(choiceKey('phone-watch', 'xqc', true)).toBe(choiceKey('phone-chats', 'xqc', true));
   });
 });

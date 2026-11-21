@@ -22,6 +22,9 @@ function control(open: boolean): StackCardControl & { toggled: number } {
   const c = {
     placed: true,
     open,
+    form: null,
+    height: 0,
+    moreCards: 0,
     order: 0,
     toggled: 0,
     onToggle: () => {
@@ -39,7 +42,7 @@ describe('the lower third folds the poll and prediction cards', () => {
     const prediction = control(false);
     const drop = control(false);
     let grown = 0;
-    const cards = { poll, prediction, drop } as Record<StackKind, StackCardControl>;
+    const cards = { poll, prediction, drop } as unknown as Record<StackKind, StackCardControl>;
     const folded = foldedStack(cards, true, () => (grown += 1));
     expect(folded.poll.open).toBe(false);
     expect(folded.prediction.open).toBe(false);
@@ -53,7 +56,7 @@ describe('the lower third folds the poll and prediction cards', () => {
   });
 
   it('leaves the stack alone outside the lower third', () => {
-    const cards = { poll: control(true), prediction: control(false), drop: control(false) } as Record<
+    const cards = { poll: control(true), prediction: control(false), drop: control(false) } as unknown as Record<
       StackKind,
       StackCardControl
     >;
