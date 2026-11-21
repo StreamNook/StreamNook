@@ -2337,6 +2337,10 @@ export interface HypeTrainLookData {
   treasure_short: string | null;
   /** null: the app's own rainbow (a regular train). */
   palette: HypeTrainPalette | null;
+  /** Twitch's own mark for the kind, from its CDN; null for a plain train. */
+  icon: string | null;
+  /** Twitch's trophy for an all-time-high train. */
+  trophy_icon: string | null;
   channel_color: string | null;
 }
 

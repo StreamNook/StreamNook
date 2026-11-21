@@ -14,6 +14,8 @@ const heist: HypeTrainLookData = {
   treasure_words: null,
   bar_name: 'Heist',
   treasure_short: null,
+  icon: null,
+  trophy_icon: null,
   palette: { background: ['#445ed6', '#fc52ae', '#ed815f'], accent: '#ffd24a', fill: '#ffffff', badge: '#fc52ae' },
   channel_color: null,
 };

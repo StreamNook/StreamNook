@@ -279,9 +279,15 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
                   then the name. The level and the amount still needed (the
                   bits) never go. */}
               <div ref={setLevelEl} className="hype-train-level flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
-                {trainLook?.all_time_high && (
-                  <Trophy size={12} weight="fill" className="hype-train-mark shrink-0" aria-label="All-time high" />
-                )}
+                {trainLook?.all_time_high &&
+                  (trainLook.trophy_icon ? (
+                    <KindMark url={trainLook.trophy_icon} label="All-time high" />
+                  ) : (
+                    <Trophy size={12} weight="fill" className="hype-train-mark shrink-0" aria-label="All-time high" />
+                  ))}
+                {/* Twitch's own mark for the kind (the heist glitch logo, the
+                    gold coin, the Golden Kappa), before its name. */}
+                {named && trainLook?.icon && <KindMark url={trainLook.icon} className="hype-train-name" />}
                 {named && (
                   <span
                     className={`hype-train-name text-[12.5px] font-bold ${lead} text-textPrimary`}
@@ -324,7 +330,9 @@ export default function HypeTrainBanner({ train, confettiTarget, onLevelUp, onEx
                     className={`hype-train-treasure hype-train-need flex ${rowH} items-center gap-1 rounded-full px-[7px] text-[11px] font-semibold text-textPrimary tabular-nums`}
                     aria-label={trainLook.treasure_words ?? trainLook.treasure_short}
                   >
-                    <Coins size={11} weight="fill" className="hype-train-mark shrink-0" aria-hidden />
+                    {/* The kind's coin already leads the name; a drawn one
+                        only when Twitch's mark is missing. */}
+                    {!trainLook.icon && <Coins size={11} weight="fill" className="hype-train-mark shrink-0" aria-hidden />}
                     <span aria-hidden>{trainLook.treasure_short}</span>
                   </span>
                 )}
@@ -510,6 +518,24 @@ interface MarkArt {
   url: string | null;
   /** The ask has answered (with art or without). */
   settled: boolean;
+}
+
+/** A train kind's mark (Twitch's own art from its CDN, Rust's look). It keeps
+ *  its 14 px slot whether or not the art has loaded, so the row never shifts,
+ *  and a failed load leaves the slot empty rather than a broken image. */
+function KindMark({ url, label, className = '' }: { url: string; label?: string; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span
+      className={`hype-train-kind-mark flex h-3.5 w-3.5 shrink-0 items-center justify-center ${className}`}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+    >
+      {!failed && (
+        <img src={url} alt="" className="h-3.5 w-3.5 object-contain" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(true)} />
+      )}
+    </span>
+  );
 }
 
 /** The subs mark in the need chip: Twitch's gift sub art (the Sub Gifter

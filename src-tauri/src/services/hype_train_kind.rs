@@ -13,6 +13,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Where Twitch keeps its hype train marks (read from twitch.tv's banner
+/// code, 2026-11-21; each one checked to answer).
+const TWITCH_ASSETS: &str = "https://static-cdn.jtvnw.net/twilight-static-assets";
+
 /// Twitch's category id for Grand Theft Auto VI.
 pub const GTA_VI_GAME_ID: &str = "1867279146";
 
@@ -67,6 +71,12 @@ pub struct TrainLook {
     pub treasure_short: Option<String>,
     /// None: the app's own look (a regular train).
     pub palette: Option<Palette>,
+    /// Twitch's own mark for the kind (the heist glitch logo, the gold coin,
+    /// the Golden Kappa, ...), drawn before the bar's name. Loaded from
+    /// Twitch's CDN, never bundled. None for a plain train.
+    pub icon: Option<String>,
+    /// Twitch's trophy for an all-time-high train.
+    pub trophy_icon: Option<String>,
     /// The channel's own hype train color, when it set one (kept for later; a
     /// regular train still draws the app's rainbow).
     pub channel_color: Option<String>,
@@ -151,6 +161,14 @@ pub fn train_look(f: &Facts) -> TrainLook {
         "Golden" => "Golden Kappa",
         other => other,
     };
+    let icon = match (kind, heist) {
+        (_, true) => Some(format!("{TWITCH_ASSETS}/heist-train-glitch.png")),
+        ("golden_kappa", _) => Some("https://static-cdn.jtvnw.net/emoticons/v2/80393/default/dark/2.0".to_string()),
+        ("treasure", _) => Some(format!("{TWITCH_ASSETS}/Hype_Train_Banner_Icon_Gold_Coin.png")),
+        ("mythic", _) => Some(format!("{TWITCH_ASSETS}/mythic_train_icon.png")),
+        ("community", _) => Some(format!("{TWITCH_ASSETS}/1a923a797768495fad684853aafd3bf281a60b7c.png")),
+        _ => None,
+    };
     let bar_name = match (f.shared, kind_word.is_empty()) {
         (true, true) => "Shared".to_string(),
         (true, false) => format!("Shared {kind_word}"),
@@ -169,6 +187,8 @@ pub fn train_look(f: &Facts) -> TrainLook {
         bar_name,
         treasure_short,
         palette: colors,
+        icon,
+        trophy_icon: f.all_time_high.then(|| format!("{TWITCH_ASSETS}/hype-train-trophy.png")),
         channel_color: f
             .channel_color
             .map(str::trim)
@@ -224,6 +244,8 @@ mod tests {
         assert_eq!(look.name, "Heist Train");
         assert_eq!(look.short_name, "Heist");
         assert_eq!(look.kickoff.as_deref(), Some("The Heist Is On!"));
+        assert!(look.icon.as_deref().is_some_and(|u| u.ends_with("/heist-train-glitch.png")));
+        assert!(train_look(&facts(Some("REGULAR"))).icon.is_none(), "a plain train wears no mark");
         assert_eq!(look.palette.as_ref().map(|p| p.background.len()), Some(3));
         // Another category, another kind, or after the event: no heist.
         assert!(train_look(&Facts { games: vec!["509658"], ..facts(Some("REGULAR")) }).theme.is_none());
@@ -261,6 +283,7 @@ mod tests {
     fn all_time_high_and_the_channel_color_ride_along() {
         let look = train_look(&Facts { all_time_high: true, channel_color: Some("9147FF"), ..facts(Some("REGULAR")) });
         assert!(look.all_time_high);
+        assert!(look.trophy_icon.as_deref().is_some_and(|u| u.ends_with("/hype-train-trophy.png")));
         assert_eq!(look.channel_color.as_deref(), Some("#9147FF"));
         assert!(look.palette.is_none(), "a regular train keeps the app's own look");
         assert_eq!(TrainLook::default().name, "Hype Train");
