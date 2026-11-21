@@ -2699,6 +2699,22 @@ fn parse_runs(message: Option<&Value>) -> (Vec<MessageSegment>, String) {
     };
     for run in runs {
         if let Some(text) = run.get("text").and_then(|t| t.as_str()) {
+            if let Some((content, link)) = link_run(text, run.get("navigationEndpoint")) {
+                // Any space around the link in the same run stays text.
+                let lead = &text[..text.len() - text.trim_start().len()];
+                let tail = &text[text.trim_end().len()..];
+                if !lead.is_empty() {
+                    plain.push_str(lead);
+                    segments.push(MessageSegment::Text { content: lead.to_string() });
+                }
+                plain.push_str(&content);
+                segments.push(link);
+                if !tail.is_empty() {
+                    plain.push_str(tail);
+                    segments.push(MessageSegment::Text { content: tail.to_string() });
+                }
+                continue;
+            }
             plain.push_str(text);
             segments.push(MessageSegment::Text {
                 content: text.to_string(),
@@ -2737,6 +2753,59 @@ fn parse_runs(message: Option<&Value>) -> (Vec<MessageSegment>, String) {
         }
     }
     (segments, plain)
+}
+
+/// A text run YouTube draws as a link, as the text it reads as and a link
+/// segment to the run's real target. YouTube crops a long link's text
+/// ("https://www.youtube.com/watch?v=bq0cG...") and keeps the whole address on
+/// the run's endpoint, so reading the link back out of the text opened a page
+/// that does not exist. The row shows the whole address when the cropped text
+/// is the start of it (as every other link reads), YouTube's own text otherwise.
+/// A run whose text is not a link (a mention, a hashtag) stays text.
+fn link_run(text: &str, endpoint: Option<&Value>) -> Option<(String, MessageSegment)> {
+    let target = endpoint_url(endpoint?)?;
+    let shown = text.trim();
+    let cropped = shown
+        .strip_suffix("...")
+        .or_else(|| shown.strip_suffix('\u{2026}'))
+        .unwrap_or(shown);
+    crate::services::link_detect::split_link(cropped)?;
+    let bare = |s: &str| -> String {
+        let lower = s.to_ascii_lowercase();
+        let rest = lower.split_once("://").map_or(lower.as_str(), |(_, r)| r);
+        rest.strip_prefix("www.").unwrap_or(rest).to_string()
+    };
+    let content = if bare(&target).starts_with(&bare(cropped)) { target.clone() } else { shown.to_string() };
+    let link = crate::services::text_spans::link_segment_to(&content, target);
+    Some((content, link))
+}
+
+/// The address a text run's `navigationEndpoint` opens: a `urlEndpoint` (an
+/// outside link, wrapped in YouTube's `/redirect?q=` page), or a YouTube page
+/// (`watchEndpoint` and the like) by its `webCommandMetadata` path. Only http
+/// and https addresses are taken.
+fn endpoint_url(endpoint: &Value) -> Option<String> {
+    let raw = endpoint
+        .pointer("/urlEndpoint/url")
+        .or_else(|| endpoint.pointer("/commandMetadata/webCommandMetadata/url"))
+        .and_then(|u| u.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            let id = endpoint.pointer("/watchEndpoint/videoId")?.as_str()?;
+            Some(format!("/watch?v={id}"))
+        })?;
+    let raw = if raw.starts_with('/') { format!("https://www.youtube.com{raw}") } else { raw };
+    let parsed = url::Url::parse(&raw).ok()?;
+    let is_web = |u: &url::Url| matches!(u.scheme(), "http" | "https");
+    if !is_web(&parsed) {
+        return None;
+    }
+    let youtube = parsed.host_str().is_some_and(|h| h == "youtube.com" || h.ends_with(".youtube.com"));
+    if youtube && parsed.path() == "/redirect" {
+        let q = parsed.query_pairs().find(|(k, _)| k == "q").map(|(_, v)| v.into_owned())?;
+        return url::Url::parse(&q).ok().filter(is_web).map(|_| q);
+    }
+    Some(raw)
 }
 
 /// Map YouTube author badges. Member badges carry real custom art (rendered via
@@ -3146,6 +3215,59 @@ mod tests {
         assert_eq!(msg.badges[0].name, "moderator");
         assert!(!msg.timestamp.is_empty());
         assert_eq!(msg.tags.get("avatar").map(String::as_str), Some("https://yt/a64.png"));
+    }
+
+    /// Rainy (Discord #bug-reports, 2026-11-18): a StreamElements message linked
+    /// a song cover; YouTube drew the link cropped ("...watch?v=bq0cG...") with
+    /// the whole address on the run's endpoint. StreamNook read the link out of
+    /// the cropped text, so it opened `watch?v=bq0cG` and its card was YouTube's
+    /// generic page. The run's shape is YouTube's live chat JSON.
+    #[test]
+    fn a_cropped_youtube_link_opens_its_whole_address() {
+        let item = json!({ "liveChatTextMessageRenderer": {
+            "id": "se-1",
+            "authorName": { "simpleText": "StreamElements" },
+            "authorExternalChannelId": "UCse",
+            "timestampUsec": "1700000000000000",
+            "message": { "runs": [
+                { "text": "check out MaeFae's latest song cover, KUKI -STEM- by SHEENA RINGO: " },
+                { "text": "https://www.youtube.com/watch?v=bq0cG...",
+                  "navigationEndpoint": {
+                    "clickTrackingParams": "CAEQl98BIhMI",
+                    "commandMetadata": { "webCommandMetadata": {
+                        "url": "/watch?v=bq0cGSnppY0", "webPageType": "WEB_PAGE_TYPE_WATCH", "rootVe": 3832 } },
+                    "watchEndpoint": { "videoId": "bq0cGSnppY0", "nofollow": true } } }
+            ] }
+        } });
+        let mut msg = parse_item(&item, "youtube:test").expect("parsed");
+        crate::services::text_spans::apply_row(&mut msg);
+        let full = "https://www.youtube.com/watch?v=bq0cGSnppY0";
+        let link = msg.segments.iter().find_map(|s| match s {
+            MessageSegment::Link { content, url, card, .. } => Some((content.clone(), url.clone(), card.clone())),
+            _ => None,
+        });
+        assert_eq!(link, Some((full.to_string(), full.to_string(), Some("youtube".to_string()))));
+        assert!(msg.content.ends_with(full), "copying the message copies the whole link: {}", msg.content);
+    }
+
+    /// An outside link arrives wrapped in YouTube's redirect page, cropped the
+    /// same way: the row opens the page itself, not the redirect.
+    #[test]
+    fn a_cropped_outside_link_opens_the_redirect_target() {
+        let redirect = "https://www.youtube.com/redirect?event=live_chat&redir_token=QUFF&q=https%3A%2F%2Fexample.com%2Fsongs%2Fkuki-stem%3Fref%3Dyt";
+        let message = json!({ "runs": [
+            { "text": "example.com/songs/ku...",
+              "navigationEndpoint": {
+                "commandMetadata": { "webCommandMetadata": { "url": redirect, "webPageType": "WEB_PAGE_TYPE_UNKNOWN" } },
+                "urlEndpoint": { "url": redirect, "target": "TARGET_NEW_WINDOW", "nofollow": true } } },
+            { "text": " and " },
+            { "text": "@SomeFan", "navigationEndpoint": { "browseEndpoint": { "browseId": "UCfan" } } }
+        ] });
+        let (segments, plain) = parse_runs(Some(&message));
+        let target = "https://example.com/songs/kuki-stem?ref=yt";
+        assert!(matches!(&segments[0], MessageSegment::Link { content, url, .. } if content == target && url == target));
+        assert!(matches!(&segments[2], MessageSegment::Text { content } if content == "@SomeFan"), "a mention stays text");
+        assert_eq!(plain, format!("{target} and @SomeFan"));
     }
 
     #[test]

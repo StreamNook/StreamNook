@@ -82,11 +82,17 @@ fn split_word(word: &str, plain: &mut String, out: &mut Vec<Piece>) {
 
 /// A link segment for one link's visible text, as the Twitch parser builds it.
 pub fn link_segment(link: &str) -> MessageSegment {
-    let url = link_detect::link_url(link);
+    link_segment_to(link, link_detect::link_url(link))
+}
+
+/// A link segment that shows `content` and opens `url`, for a provider that
+/// hands the real address beside the text it shows (YouTube crops long links).
+/// The card is the one `url` gets, so the preview shows the real page.
+pub fn link_segment_to(content: &str, url: String) -> MessageSegment {
     let card = crate::commands::link_preview::expected_card(&url).map(String::from);
     MessageSegment::Link {
-        content: link.to_string(),
-        label: crate::services::chat_row_view::link_label(link),
+        content: content.to_string(),
+        label: crate::services::chat_row_view::link_label(content),
         url,
         card,
     }
