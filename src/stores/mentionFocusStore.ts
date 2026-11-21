@@ -4,7 +4,8 @@
 // platform and the server's rows). The inbox surfaces (the island's history,
 // MultiChat's Mentions mode, the phones' Mentions sheet) listen here: they open
 // themselves, find the entry (loading older pages while it is not among the
-// loaded ones, a few times) and mark it.
+// loaded ones, for as long as there are older ones) and mark it; one that is not
+// there at the end of the list says so.
 
 import { useSyncExternalStore } from 'react';
 
@@ -49,8 +50,9 @@ export function useMentionFocus(): MentionFocus | null {
   return useSyncExternalStore(subscribe, read, read);
 }
 
-/** How many older pages an inbox loads looking for the entry before giving up. */
-export const FOCUS_MAX_PAGES = 5;
+/** The most older pages an inbox loads looking for the entry. A safety stop only:
+ *  the search ends at the end of the list, with a word to the viewer, long before. */
+export const FOCUS_MAX_PAGES = 80;
 /** How long the found row stays highlighted. */
 export const FOCUS_HIGHLIGHT_MS = 2400;
 

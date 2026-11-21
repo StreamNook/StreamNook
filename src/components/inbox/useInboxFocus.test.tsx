@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { mentionRowIdsOf, rowHolding, useInboxFocus } from './useInboxFocus';
+const addToast = vi.hoisted(() => vi.fn());
+vi.mock('../../stores/AppStore', () => ({ useAppStore: { getState: () => ({ addToast }) } }));
+
+import { FOCUS_MISSING_WORDS, mentionRowIdsOf, rowHolding, useInboxFocus } from './useInboxFocus';
 import {
   FOCUS_HIGHLIGHT_MS,
   FOCUS_MAX_PAGES,
@@ -104,19 +107,50 @@ describe('useInboxFocus', () => {
     expect(seen.waiting).toBe(false);
   });
 
-  it('loads older pages while the entry is missing, then gives up quietly', () => {
+  it('keeps paging while there are older pages, and finds an entry past the old five', () => {
+    let rows = [mentionRow('a')];
+    const render = (hasMore = true) => act(() => root.render(<Probe rows={rows} hasMore={hasMore} />));
+    render();
+    act(() => requestMentionFocus({ id: 'deep', room: 'xqc' }));
+    expect(seen.asked).toBe(1);
+    // each page that lands (a longer list) asks for one more
+    for (let i = 0; i < 9; i++) {
+      rows = [...rows, mentionRow(`p${i}`)];
+      render();
+    }
+    expect(seen.asked).toBe(10);
+    expect(seen.waiting).toBe(true);
+    rows = [...rows, mentionRow('deep')];
+    render();
+    expect(seen.focused).toBe('row-deep');
+    expect(addToast).not.toHaveBeenCalled();
+  });
+
+  it('says so at the end of the list instead of giving up silently', () => {
+    addToast.mockClear();
+    let rows = [mentionRow('a')];
+    const render = (hasMore: boolean) => act(() => root.render(<Probe rows={rows} hasMore={hasMore} />));
+    render(true);
+    act(() => requestMentionFocus({ id: 'gone', room: 'xqc' }));
+    rows = [...rows, mentionRow('b')];
+    render(false);
+    expect(addToast).toHaveBeenCalledWith(FOCUS_MISSING_WORDS, 'info');
+    expect(seen.focused).toBeNull();
+    expect(seen.waiting).toBe(false);
+  });
+
+  it('a runaway list is stopped by the safety limit, with the same word', () => {
+    addToast.mockClear();
     let rows = [mentionRow('a')];
     const render = () => act(() => root.render(<Probe rows={rows} hasMore />));
     render();
-    act(() => requestMentionFocus({ id: 'old', room: 'xqc' }));
-    expect(seen.asked).toBe(1);
-    // each page that lands (a longer list) asks for one more, up to the limit
+    act(() => requestMentionFocus({ id: 'never', room: 'xqc' }));
     for (let i = 0; i < FOCUS_MAX_PAGES + 2; i++) {
       rows = [...rows, mentionRow(`p${i}`)];
       render();
     }
     expect(seen.asked).toBe(FOCUS_MAX_PAGES);
-    expect(seen.focused).toBeNull();
+    expect(addToast).toHaveBeenCalledTimes(1);
     expect(seen.waiting).toBe(false);
   });
 });

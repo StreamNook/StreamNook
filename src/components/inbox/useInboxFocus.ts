@@ -1,9 +1,9 @@
 // Shows a pinned mention's entry in an inbox list (SN-284). A pin from another
 // chat asks the inbox to open at its entry (`requestMentionFocus`); the list
 // that is on screen finds the row (loading older pages while it is not among
-// the loaded ones, a few times), scrolls it to the middle and highlights it for
-// a moment. The row keeps its own opener. A list that never finds it gives up
-// quietly after FOCUS_MAX_PAGES pages.
+// the loaded ones, up to the end of the list), scrolls it to the middle and
+// highlights it for a moment. The row keeps its own opener. A list that does not
+// have it by its last page says so, so the tap is never left looking dead.
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import {
@@ -12,7 +12,11 @@ import {
   settleMentionFocus,
   useMentionFocus,
 } from '../../stores/mentionFocusStore';
+import { useAppStore } from '../../stores/AppStore';
 import type { InboxItem } from '../../types';
+
+/** What the viewer is told when the entry is no longer in the inbox. */
+export const FOCUS_MISSING_WORDS = 'That mention is no longer in your inbox';
 
 /** The ids a mention row stands for: its newest entry and every folded copy. */
 export function mentionRowIdsOf(row: InboxItem): string[] {
@@ -72,7 +76,10 @@ export function useInboxFocus(opts: {
       loadOlder();
       return;
     }
-    if (!hasMore || state.asked >= FOCUS_MAX_PAGES) settleMentionFocus(focus.nonce);
+    if (!hasMore || state.asked >= FOCUS_MAX_PAGES) {
+      useAppStore.getState().addToast(FOCUS_MISSING_WORDS, 'info');
+      settleMentionFocus(focus.nonce);
+    }
   }, [focus, active, loaded, rows, hasMore, loadOlder, container]);
 
   return focusedRowId;
