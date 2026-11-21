@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GAP, gridRects, nookLayout, tierFor, type Rect } from './nookLayout';
+import { GAP, MIN_SLICE_CHAT_H, MIN_SLICE_W, gridRects, nookLayout, tierFor, type Rect } from './nookLayout';
 
 // The flex grid MultiNookView drew before the layout engine: the same solver,
 // returning the cell size and column count. Grid must keep producing exactly
@@ -117,6 +117,63 @@ describe('main layouts', () => {
 
   it('a stage with no size has no tiles', () => {
     expect(nookLayout(0, 860, 4, 'main_row', 0.25)).toEqual([]);
+  });
+});
+
+describe('Sliced', () => {
+  for (const [W, H] of [[1400, 860], [1100, 900], [800, 450], [1920, 1000], [1400, 400]] as const) {
+    it(`gives 1 to 25 tiles a video and a chat that fit at ${W}x${H}`, () => {
+      for (let n = 1; n <= 25; n++) {
+        const rects = nookLayout(W, H, n, 'sliced', 0.25);
+        expect(rects).toHaveLength(n);
+        const boxes: Rect[] = [];
+        for (const r of rects) {
+          expect(r.main).toBe(false);
+          expect(isWide(r)).toBe(true);
+          expect(inside(r, W, H)).toBe(true);
+          const chat = r.chat as Rect;
+          expect(inside(chat, W, H)).toBe(true);
+          expect(chat.h).toBeGreaterThanOrEqual(MIN_SLICE_CHAT_H);
+          // The chat is under its own video, and as wide as the slice.
+          expect(chat.y).toBeGreaterThanOrEqual(r.y + r.h);
+          expect(chat.w).toBeGreaterThanOrEqual(r.w);
+          boxes.push(r, chat);
+        }
+        for (let i = 0; i < boxes.length; i++) {
+          for (let j = i + 1; j < boxes.length; j++) expect(overlaps(boxes[i], boxes[j])).toBe(false);
+        }
+      }
+    });
+  }
+
+  it('stands the slices side by side while each is wide enough', () => {
+    const rects = nookLayout(1400, 860, 4, 'sliced', 0.25);
+    expect(new Set(rects.map((r) => r.y)).size).toBe(1);
+    for (const r of rects) expect(r.w).toBeGreaterThanOrEqual(MIN_SLICE_W);
+  });
+
+  it('wraps to another row before a slice gets too thin for a chat', () => {
+    const rects = nookLayout(1400, 860, 9, 'sliced', 0.25);
+    expect(new Set(rects.map((r) => r.y)).size).toBe(2);
+    for (const r of rects) expect((r.chat as Rect).w).toBeGreaterThanOrEqual(MIN_SLICE_W);
+    // The short row is on top, as in Grid.
+    const top = Math.min(...rects.map((r) => r.y));
+    expect(rects.filter((r) => r.y === top)).toHaveLength(4);
+  });
+
+  it('one tile still gets its chat', () => {
+    const [only] = nookLayout(1400, 860, 1, 'sliced', 0.25);
+    expect(only.chat).toBeDefined();
+  });
+
+  it('only Sliced has chats', () => {
+    for (const mode of ['grid', 'main_row', 'main_column'] as const) {
+      for (const r of nookLayout(1400, 860, 5, mode, 0.25)) expect(r.chat).toBeUndefined();
+    }
+  });
+
+  it('a stage too small for a video and a chat falls back to Grid', () => {
+    expect(nookLayout(300, 120, 4, 'sliced', 0.25)).toEqual(nookLayout(300, 120, 4, 'grid', 0.25));
   });
 });
 

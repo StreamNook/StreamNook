@@ -23,10 +23,12 @@ import {
   rectSwappingStrategy,
 } from '@dnd-kit/sortable';
 import { ArrowUpFromLine } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
 import { MultiNookCell } from './MultiNookCell';
 import MultiNookToolbar from './MultiNookToolbar';
 import { MultiNookTutorial } from './MultiNookTutorial';
 import { MultiNookTileMenu } from './MultiNookTileMenu';
+import { MultiNookSliceChats, type SliceChat } from './MultiNookSliceChat';
 import { activeChatSlot, usemultiNookStore } from '../../stores/multiNookStore';
 import { useTutorialStore } from '../../stores/tutorialStore';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
@@ -52,7 +54,8 @@ export const MultiNookView: React.FC = () => {
   const maximizedSlotId = usemultiNookStore((s) => s.maximizedSlotId);
   const { reorderSlots, dockSlot, undockSlot, batchLoadMissingStreams, setMaximizedSlot, makeMainSlot, reconcileTileCaps } =
     usemultiNookStore.getState();
-  // Grid, or one main tile with the rest small (a setting Rust keeps).
+  // Grid, one main tile with the rest small, or slices that each carry their
+  // own chat (a setting Rust keeps).
   const layout = useAppStore((s) => s.settings.multi_nook_layout) ?? DEFAULT_MULTI_NOOK_LAYOUT;
   const mainLayout = layout.mode === 'main_row' || layout.mode === 'main_column';
   // The slider's live value while it is being dragged, else the saved one.
@@ -378,6 +381,16 @@ export const MultiNookView: React.FC = () => {
     return new Map(visibleSlots.map((s, i) => [s.id, places[i]]));
   }, [visibleSlots, dimensions, layout.mode, stripShare]);
 
+  // Sliced: each visible tile's chat rectangle, in tile order.
+  const sliceChats = useMemo(
+    () =>
+      visibleSlots.flatMap((slot): SliceChat[] => {
+        const rect = placeById.get(slot.id)?.chat;
+        return rect ? [{ slot, rect }] : [];
+      }),
+    [visibleSlots, placeById],
+  );
+
   // With a small-tile quality cap, a tile that changes role (made main, moved
   // to the strip, spotlighted, docked) restarts at its new size's quality.
   // Without one this finds nothing to do.
@@ -451,6 +464,13 @@ export const MultiNookView: React.FC = () => {
                     );
                   })}
                 </SortableContext>
+
+                {/* Sliced: each tile's own chat under it. Beside the tiles, not
+                    inside them, so a tile is the same node in every layout and
+                    switching to or from Sliced rebuilds no player. */}
+                <AnimatePresence>
+                  {!isMaximizing && sliceChats.length > 0 && <MultiNookSliceChats key="slice-chats" slices={sliceChats} />}
+                </AnimatePresence>
 
                 {/* Keep minimized streams mounted in the DOM to avoid HLS cold-start buffering */}
                 {minimizedSlots.map((slot) => (

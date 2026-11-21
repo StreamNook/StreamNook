@@ -28,12 +28,17 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
   dockDropId = 'dock-drop-zone',
   dockedPrefix = 'docked::',
 }) => {
-  const { slots, addSlot, undockSlot, swapDockedSlot, isChatHidden, toggleChatHidden, toggleMultiNook, resyncAllSlots, isAllMuted, toggleAllMuted } = usemultiNookStore();
+  const { slots, addSlot, undockSlot, swapDockedSlot, isChatHidden, toggleChatHidden, toggleMultiNook, resyncAllSlots, isAllMuted, toggleAllMuted, maximizedSlotId } = usemultiNookStore();
   const minimizedSlots = slots.filter(s => s.isMinimized);
   const { isDocked: isTutorialDocked, setIsDocked: setTutorialDocked } = useTutorialStore();
 
   // Mod-view (Moderator Logs pane) visibility — the global, now-persisted setting.
   const showModLogs = useAppStore((s) => s.settings.show_mod_logs ?? false);
+  // Sliced puts a chat under every stream; the shared panel is only back
+  // while one tile fills the space.
+  const sliced =
+    useAppStore((s) => s.settings.multi_nook_layout?.mode === 'sliced') &&
+    !slots.some((s) => s.id === maximizedSlotId && !s.isMinimized);
   const toggleModLogs = useCallback(() => {
     const st = useAppStore.getState();
     st.updateSettings({ ...st.settings, show_mod_logs: !(st.settings.show_mod_logs ?? false) });
@@ -514,11 +519,17 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
           </Tooltip>
 
           {/* Chat Toggle */}
-          <Tooltip content={isChatHidden ? 'Show chat' : 'Hide chat'} delay={200} side="bottom">
+          {/* Sliced has a chat under every stream and no shared panel to hide. */}
+          <Tooltip
+            content={sliced ? 'Each stream has its own chat in Sliced' : isChatHidden ? 'Show chat' : 'Hide chat'}
+            delay={200}
+            side="bottom"
+          >
             <button
               onClick={toggleChatHidden}
               aria-pressed={isChatHidden}
-              className={`titlebar-icon-btn ${isChatHidden ? 'is-active' : 'hover:!text-error'}`}
+              disabled={sliced}
+              className={`titlebar-icon-btn disabled:cursor-default disabled:opacity-40 ${isChatHidden ? 'is-active' : 'hover:!text-error'}`}
             >
               {isChatHidden ? <MessageSquareOff size={16} /> : <MessageSquare size={16} />}
             </button>
