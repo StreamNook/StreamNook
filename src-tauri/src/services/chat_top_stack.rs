@@ -234,7 +234,14 @@ pub fn layout(req: &StackRequest) -> StackLayout {
     // Pass A: the floor, a separate "N more cards" strip. Pass B (too short for both): the
     // floor is one line with the count inline and the fold merges into it.
     let floor = height_of(req, "mention_pins");
-    let strips: Vec<&str> = others.iter().copied().filter(|k| Some(*k) != open_kind).collect();
+    // A running hype train is reserved like the pins floor: it never folds into "N more cards"
+    // (SN-284 polish), unless it could not fit even beside what must stay next to it.
+    // Beside the smallest form of the pins (their count line, which also takes the "N more cards"
+    // fold) or, with no pins, beside the "N more cards" strip when another card may fold.
+    let beside = if pins { floor.line } else if others.len() > 1 { MORE_HEIGHT } else { 0.0 };
+    let hype_reserved = others.contains(&"hype") && strip("hype") + beside <= cap.unwrap_or(f64::INFINITY);
+    let reserved_h = if hype_reserved { strip("hype") } else { 0.0 };
+    let strips: Vec<&str> = others.iter().copied().filter(|k| Some(*k) != open_kind && !(hype_reserved && *k == "hype")).collect();
     let open_min = open_kind.filter(|k| others.contains(k)).map(strip).unwrap_or(0.0);
     let all_strips: f64 = strips.iter().map(|k| strip(k)).sum();
     let floor_h = if pins { floor.strip } else { 0.0 };
@@ -243,15 +250,15 @@ pub fn layout(req: &StackRequest) -> StackLayout {
     let unlimited = cap.is_none();
     let cap_v = cap.unwrap_or(f64::INFINITY);
 
-    let fits_all = floor_h + all_strips + open_min <= cap_v;
-    let pass_a = fits_all || floor_h + MORE_HEIGHT + open_min <= cap_v;
+    let fits_all = floor_h + reserved_h + all_strips + open_min <= cap_v;
+    let pass_a = fits_all || floor_h + reserved_h + MORE_HEIGHT + open_min <= cap_v;
     let merged = pins && !pass_a;
     let (pins_base, reserve_more) = if merged { (floor.line, false) } else { (floor_h, true) };
 
     // The strips that stay: a prefix (lowest rank folds first) that leaves room for the
     // open card's strip and, when something folds, the "N more cards" strip.
     let mut kept: Vec<&str> = Vec::new();
-    let mut used = pins_base + open_min;
+    let mut used = pins_base + reserved_h + open_min;
     for (i, k) in strips.iter().enumerate() {
         let remaining_after: usize = strips.len() - i - 1;
         let more_needed = if reserve_more && remaining_after > 0 { MORE_HEIGHT } else { 0.0 };
@@ -532,6 +539,27 @@ mod tests {
     }
 
     #[test]
+    fn a_running_hype_train_is_reserved_like_the_pins_floor_and_never_folds() {
+        // 380 px: cap 152. The hype strip (36) and the floor (64) are both kept; the poll
+        // takes what is left or folds into "N more cards", never the hype train.
+        let l = layout(&req(&["hype", "poll", "mention_pins"], 380.0));
+        assert_eq!(form_of(&l, "hype").form, Form::Strip);
+        assert_eq!(form_of(&l, "mention_pins").form, Form::Floor);
+        assert!(l.height <= l.max_height);
+        // Measured as the shells draw it (52) beside a taller floor (90): still kept, the rest fold.
+        let mut r = req(&["hype", "poll", "channel_pin", "mention_pins"], 380.0);
+        r.heights.insert("hype".into(), CardHeights { strip: 52.0, open: 52.0, line: 0.0 });
+        r.heights.insert("mention_pins".into(), CardHeights { strip: 90.0, open: 240.0, line: 28.0 });
+        let l = layout(&r);
+        assert_eq!(form_of(&l, "hype").form, Form::Strip);
+        assert!(l.height <= l.max_height);
+        // Only a column that cannot hold it beside the smallest form of the pins folds it.
+        let mut tiny = req(&["hype", "mention_pins"], 100.0);
+        tiny.heights.insert("hype".into(), CardHeights { strip: 60.0, open: 60.0, line: 0.0 });
+        assert!(layout(&tiny).height <= MIN_HEIGHT);
+    }
+
+    #[test]
     fn a_column_too_short_for_the_floor_and_the_more_strip_merges_them_into_the_count_line() {
         let l = layout(&req(&["hype", "poll", "drop", "mention_pins"], 150.0));
         assert_eq!(l.max_height, MIN_HEIGHT);
@@ -683,6 +711,11 @@ mod tests {
             })),
             ("no_pins_keeps_the_old_stack", with(&["drop", "poll"], 700.0, &|_| {})),
             ("an_unknown_height", with(&["poll", "mention_pins"], 0.0, &|_| {})),
+            ("a_running_hype_train_and_the_pins_floor_are_both_kept_at_380", with(&["hype", "poll", "mention_pins"], 380.0, &|_| {})),
+            ("a_measured_hype_strip_is_kept_beside_a_taller_pins_floor_at_380", with(&["hype", "poll", "channel_pin", "mention_pins"], 380.0, &|r| {
+                r.heights.insert("hype".into(), CardHeights { strip: 52.0, open: 52.0, line: 0.0 });
+                r.heights.insert("mention_pins".into(), CardHeights { strip: 90.0, open: 240.0, line: 28.0 });
+            })),
         ]
     }
 

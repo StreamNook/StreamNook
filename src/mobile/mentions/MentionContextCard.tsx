@@ -7,6 +7,7 @@ import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { CaretDown, X } from 'phosphor-react';
 import { agoLabel } from '../../utils/lastLive';
 import { StackCard } from '../../components/chat/ChatOverlayStack';
+import { BANNER_STYLE, GLAZE_BANNER } from '../../components/ui/glazeButtons';
 import { useCardPresence, type StackCardControl, type StackKind } from '../../components/chat/chatTopStack';
 import { dismissContextCard, KIND_LABEL, type MentionEntry } from './mentionInbox';
 
@@ -43,7 +44,8 @@ export const MentionContextCard: React.FC<{
     <div
       ref={rootRef}
       onPointerDownCapture={markInside}
-      className="sn-popover sn-popover--static pointer-events-auto flex h-9 items-center gap-2 rounded-xl pl-3 pr-1"
+      className={`${GLAZE_BANNER} relative pointer-events-auto flex h-9 items-center gap-2 pl-3 pr-1`}
+      style={BANNER_STYLE}
     >
       <button type="button" onClick={stack.onToggle} aria-expanded={false} className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left">
         <span className="min-w-0 truncate text-[13px] font-semibold text-textPrimary" style={color ? { color } : undefined}>
@@ -67,7 +69,8 @@ export const MentionContextCard: React.FC<{
     <div
       ref={rootRef}
       onPointerDownCapture={markInside}
-      className="sn-popover pointer-events-auto rounded-xl px-3 pt-2 pb-2.5 flex items-start gap-2"
+      className={`${GLAZE_BANNER} relative pointer-events-auto px-3 pt-2 pb-2.5 flex items-start gap-2`}
+      style={BANNER_STYLE}
     >
       <div className="flex-1 min-w-0">
         <div className="text-[11.5px] font-semibold uppercase tracking-wide text-textMuted leading-[16px]">

@@ -5,6 +5,8 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, type ReactNode } from 'react';
 import { StackCard } from './ChatOverlayStack';
+import { FadeScroller } from './FadeScroller';
+import { BANNER_STYLE, GLAZE_BANNER } from '../ui/glazeButtons';
 import type { StackCardControl, StackKind } from './chatTopStack';
 import { CaretDown } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
@@ -37,7 +39,7 @@ export interface PinnedMessage {
 }
 
 // Lifts an unpainted pinned name off the glass; a 7TV paint brings its own shadow.
-const PIN_NAME_SHADOW = { textShadow: '0 1px 2px rgba(0,0,0,0.8)' } as const;
+const PIN_NAME_SHADOW = { textShadow: 'var(--pin-name-shadow, 0 1px 2px rgba(0,0,0,0.8))' } as const;
 
 interface PinnedBarProps {
   pins: PinnedMessage[];
@@ -108,6 +110,8 @@ export function PinnedBar({
   if (pins.length === 0 && !after) return null;
   const hasPins = pins.length > 0;
   // In the stack Rust's form decides which of the two the pin is.
+  // Held to the height Rust gave it, the glass takes that as its max-height and its body scrolls.
+  const cap = stack && stack.placed && stack.form === 'open' && stack.height > 0 ? stack.height : 0;
   const showOpen = hasPins && (stack ? stack.placed && stack.form === 'open' : expanded);
   const showBar =
     hasPins &&
@@ -132,7 +136,8 @@ export function PinnedBar({
             exit={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
             transition={{ duration: 0.3, ease: [0.175, 0.885, 0.32, 1.2] }}
             // The emote, bits and mod menus' glass, blur and corners.
-            className={`glass-flyout rounded-xl !p-0 w-full ${stack ? "" : "max-w-sm mt-2"} pointer-events-auto overflow-hidden origin-top cursor-pointer`}
+            className={`${GLAZE_BANNER} relative flex flex-col w-full ${stack ? "" : "max-w-sm mt-2"} pointer-events-auto overflow-hidden origin-top cursor-pointer`}
+            style={{ ...BANNER_STYLE, maxHeight: cap > 0 ? cap : undefined }}
             // Clicking the open pin folds it back to the bar, the same gesture
             // that opened it. Interactive children (unpin, links, preview cards)
             // keep their own click, and a drag that selected text is a copy,
@@ -156,6 +161,7 @@ export function PinnedBar({
             }}
             data-pin-card=""
           >
+            <FadeScroller>
             {pins.map((pin, i) => {
               // Same link-preview pipeline the main chat uses, applied to the
               // pinned message.
@@ -302,6 +308,7 @@ export function PinnedBar({
                 </div>
               );
             })}
+            </FadeScroller>
           </motion.div>
         )}
       </AnimatePresence>
@@ -319,7 +326,8 @@ export function PinnedBar({
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
               onClick={() => expand(pin.id)}
-              className={`${stack ? "" : "max-w-sm mt-2"} glass-flyout rounded-xl group w-full pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors`}
+              style={BANNER_STYLE}
+              className={`${stack ? "" : "max-w-sm mt-2"} ${GLAZE_BANNER} relative group w-full pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors`}
             >
               <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
                 <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>

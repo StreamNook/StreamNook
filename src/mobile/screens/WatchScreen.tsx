@@ -2360,12 +2360,12 @@ export const WatchScreen: React.FC = () => {
               // the stream's own cards stay out of it; the mentions pinned for you belong to
               // the room, so they show there too, in the dark ink.
               <ChatOverlayStack
-                top={0}
+                top={6}
                 phone
                 maxHeight={topStack.maxHeight}
                 more={topStack.more}
                 onBottom={setStackBottom}
-                className="!left-0 !right-0 px-2.5 pt-1.5"
+                className="!left-2.5 !right-2.5"
               >
                 {!chatOverlay && (
                   // The hype train belongs to the STREAM, not to whichever chat tab you are

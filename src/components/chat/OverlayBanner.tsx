@@ -2,6 +2,7 @@ import { type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { AnimatePresence, motion, useIsPresent } from 'framer-motion';
 import { STACK_GAP_PX } from './chatTopStack';
+import { BANNER_STYLE, GLAZE_BANNER } from '../ui/glazeButtons';
 
 // How a card leaves the stack: it fades where it is, then folds its height
 // (and the gap after it) away, so the cards below slide up only once it is
@@ -103,7 +104,7 @@ export function OverlayBanner({
       className={`flex flex-col min-h-0 ${isExpanded ? 'shrink' : 'shrink-0'} ${present ? '' : 'pointer-events-none'}`}
       style={order === undefined ? undefined : { order }}
     >
-      <div className="relative flex flex-col min-h-0 bg-background rounded-lg border border-border shadow-md shadow-black/25 overflow-hidden">
+      <div className={`${GLAZE_BANNER} relative flex flex-col min-h-0 overflow-hidden`} style={BANNER_STYLE}>
         <button
           type="button"
           onClick={onToggleExpanded}

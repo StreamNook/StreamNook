@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useAppStore } from '../../stores/AppStore';
 import { usePerformanceQuiet } from '../../utils/lowPower';
 import type { StackCardControl, StackKind, StackMore } from './chatTopStack';
 import { stackBottomOf } from './stackSpacer';
+import { BANNER_STYLE, GLAZE_BANNER } from '../ui/glazeButtons';
 /**
  * Holds the cards at the top of chat (the hype train, the poll and prediction,
  * the channel's pinned message, the mention context card, the pinned mentions)
@@ -31,7 +32,7 @@ interface ChatOverlayStackProps {
   hidden?: boolean;
   /** The "N more cards" strip: what Rust folded away, drawn last. */
   more?: StackMore | null;
-  /** The phone's glaze for the strip. */
+  /** Kept for the hosts that pass it: every card now wears the one glaze. */
   phone?: boolean;
   /** Where the column ends, in the host's pixels (0 when it draws nothing),
    *  with a small gap below it. */
@@ -56,7 +57,7 @@ export function useStackBottom(top: number, onBottom?: (bottom: number) => void)
     // Only what is drawn counts: cards Rust folded stay mounted, hidden, and the
     // column's own padding is not a stack.
     const read = () => {
-      const drawn = Array.from(el.children).some((c) => c.getBoundingClientRect().height > 0);
+      const drawn = Array.from(el.children).some((c) => !(c as HTMLElement).dataset.stackBacking && c.getBoundingClientRect().height > 0);
       setHeight(drawn ? Math.round(el.getBoundingClientRect().height) : 0);
     };
     read();
@@ -74,13 +75,20 @@ export function useStackBottom(top: number, onBottom?: (bottom: number) => void)
   return { setEl, height, bottom };
 }
 
+/** The column's shared backing: blur and a tint that goes solid at Glassiness 0. */
+const STACK_BACKING_STYLE: CSSProperties = {
+  borderRadius: 14,
+  backgroundColor: 'color-mix(in srgb, var(--color-background-tertiary) calc((1 - var(--glass-strength, 1)) * 100% + 38%), transparent)',
+  backdropFilter: 'blur(calc(14px * var(--glass-strength, 1))) saturate(140%)',
+  WebkitBackdropFilter: 'blur(calc(14px * var(--glass-strength, 1))) saturate(140%)',
+};
+
 export function ChatOverlayStack({
   top,
   maxHeight = 0,
   stackRef,
   hidden = false,
   more = null,
-  phone = false,
   onBottom,
   className = '',
   children,
@@ -101,18 +109,20 @@ export function ChatOverlayStack({
       data-chat-top-stack=""
       className={`${
         floating ? `absolute left-2 right-2 z-40 ${motionOff ? '' : 'transition-[top] duration-[180ms] ease-in-out'}` : 'relative shrink-0'
-      } pointer-events-none [:where(&>*)]:pointer-events-auto flex-col gap-1 ${hidden ? 'hidden' : 'flex'} ${className}`}
+      } isolate pointer-events-none [:where(&>*)]:pointer-events-auto flex-col gap-1 ${hidden ? 'hidden' : 'flex'} ${className}`}
       style={{ top, maxHeight: maxHeight > 0 ? maxHeight : undefined }}
     >
+      {/* One glass backing behind the whole column, a sibling of the cards (never their
+          ancestor, so each card keeps its own blur): the 4 px gaps between cards show it
+          instead of half-cut chat rows, and the group reads as one layer. */}
+      <div data-stack-backing="" aria-hidden className="pointer-events-none absolute inset-0 -z-10" style={STACK_BACKING_STYLE} />
       {children}
       {more && more.count > 0 && (
         <div
           data-stack-more=""
           // Last in the column whatever order the cards were given.
-          style={{ order: 99, minHeight: more.height }}
-          className={`pointer-events-none flex shrink-0 items-center justify-center rounded-xl px-3 text-[11.5px] font-semibold leading-4 tabular-nums text-textSecondary ${
-            phone ? 'chrome-glaze !rounded-2xl' : 'glass-flyout'
-          }`}
+          style={{ ...BANNER_STYLE, order: 99, minHeight: more.height }}
+          className={`${GLAZE_BANNER} pointer-events-none relative flex shrink-0 items-center justify-center px-3 text-[11.5px] font-semibold leading-4 tabular-nums text-textSecondary`}
         >
           {more.count} more {more.count === 1 ? 'card' : 'cards'}
         </div>
@@ -157,7 +167,12 @@ export function StackCard({
     if (!el || !measure || folded || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       // Capped, the box is shorter than its content: the content is what it measures.
-      const h = Math.round(Math.max(el.getBoundingClientRect().height, scrollOpen ? el.scrollHeight : 0));
+      // A body scrolled inside a card held to a height: its hidden rows count too.
+      const hidden = Array.from(el.querySelectorAll<HTMLElement>('[data-fade-scroll]')).reduce(
+        (a, f) => a + Math.max(0, f.scrollHeight - f.clientHeight),
+        0,
+      );
+      const h = Math.round(Math.max(el.getBoundingClientRect().height + hidden, scrollOpen ? el.scrollHeight + hidden : 0));
       if (h > 0) measure(kind, form, h);
     });
     ro.observe(el);
@@ -171,9 +186,10 @@ export function StackCard({
       data-form={control.form ?? ''}
       className={`${folded ? 'hidden' : 'flex'} min-w-0 shrink-0 flex-col ${
         // The card inside keeps its natural height: left to shrink (it clips itself), it
-        // cut its last line mid-glyph and nothing here ever scrolled. No edge fade here: a
-        // mask on this element would make it the backdrop root of the glass card inside and
-        // flatten that card's blur.
+        // cut its last line mid-glyph and nothing here ever scrolled. A card that takes the
+        // height itself (its glass held to it, its body a FadeScroller) never reaches this.
+        // No edge fade here: a mask on this element would make it the backdrop root of the
+        // glass card inside and flatten that card's blur.
         capped ? 'overflow-y-auto overscroll-contain [&>*]:shrink-0' : ''
       } ${className}`}
       style={{ order: control.order, maxHeight: capped ? control.height : undefined }}

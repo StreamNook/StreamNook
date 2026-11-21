@@ -415,13 +415,13 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
               topInset={stackBottom}
               top={
                 <ChatOverlayStack
-                  top={0}
+                  top={12}
                   phone
                   maxHeight={topStack.maxHeight}
                   more={topStack.more}
                   onBottom={setStackBottom}
                   // A grabber's gap under the header.
-                  className="!left-0 !right-0 px-2.5 pt-3"
+                  className="!left-2.5 !right-2.5"
                 >
                   <PinnedBanner
                     pins={pinned}

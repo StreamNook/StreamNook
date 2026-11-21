@@ -9631,3 +9631,9 @@ html[data-sn-low-power] .sn-tbt-pointer {
 :root[data-theme-tone='light'] .sn-error-text {
   color: color-mix(in srgb, var(--color-error) 75%, black);
 }
+
+/* The channel pin's unpainted name lifts off dark glass with a shadow; on a light theme the same shadow
+   smears a dark halo round the letters, so a light theme draws the name crisp (SN-284 polish). */
+html[data-theme-tone='light'] {
+  --pin-name-shadow: none;
+}

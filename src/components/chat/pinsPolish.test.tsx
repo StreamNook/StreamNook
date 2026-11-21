@@ -123,6 +123,11 @@ describe('the pins block', () => {
     expect(pins).toContain("el.querySelectorAll('[data-pin-id]').forEach((row) => ro.observe(row))");
   });
 
+  it('files a measure under the form that is drawn (read from the element), not the form of a stale callback', () => {
+    expect(pins).toContain('(el.dataset.mentionPins as PinsForm | undefined) ?? form');
+    expect(pins).toContain('onMeasure({ form: drawnForm, height: Math.round(h) })');
+  });
+
   it('keeps the newest in view when a row grows, and fades an edge a row is cut at', () => {
     expect(pins).toContain('if (stuckToEnd.current && !frozenRef.current) inner.scrollTop = inner.scrollHeight');
     expect(pins).toContain('style={edgeFade(edges)}');
@@ -144,5 +149,48 @@ describe('the pins block', () => {
 
   it('over the picture the phone card takes a film under the glaze, inline (the class sets the knob itself)', () => {
     expect(pins).toContain("'--glaze-frost': '55%'");
+  });
+});
+
+describe('the stack reads as one layered group', () => {
+  it('every card wears the one glaze and radius (hype, votes, channel pin, context card, pins, the more strip)', () => {
+    for (const f of [
+      'src/components/chat/OverlayBanner.tsx',
+      'src/components/chat/PinnedBar.tsx',
+      'src/mobile/watch/PinnedBanner.tsx',
+      'src/mobile/mentions/MentionContextCard.tsx',
+      'src/components/mentions/MentionPins.tsx',
+      'src/components/chat/ChatOverlayStack.tsx',
+    ]) {
+      const text = src(f);
+      expect(text, f).toContain('GLAZE_BANNER');
+      expect(text, f).toContain('BANNER_STYLE');
+      expect(text, f).not.toMatch(/glass-flyout|sn-popover|bg-background rounded-lg/);
+    }
+  });
+
+  it('a shared glass backing sits behind the column as a sibling, so the gaps show glass, never cut rows', () => {
+    const stack = src('src/components/chat/ChatOverlayStack.tsx');
+    expect(stack).toContain('data-stack-backing=""');
+    // It is not a stack: the drawn-height read skips it.
+    expect(stack).toContain('!(c as HTMLElement).dataset.stackBacking');
+  });
+
+  it('the phones give the column its inset as left and right, so the backing meets the cards', () => {
+    expect(src('src/mobile/screens/WatchScreen.tsx')).toContain('className="!left-2.5 !right-2.5"');
+    expect(src('src/mobile/screens/ChatsScreen.tsx')).toContain('className="!left-2.5 !right-2.5"');
+  });
+
+  it('a held open card scrolls its body (masked), never its glass', () => {
+    expect(src('src/components/chat/PinnedBar.tsx')).toContain('<FadeScroller>');
+    expect(src('src/mobile/watch/PinnedBanner.tsx')).toContain('<FadeScroller');
+    expect(src('src/components/chat/FadeScroller.tsx')).toContain('style={edgeFade(edges)}');
+    expect(src('src/components/chat/ChatOverlayStack.tsx')).toContain("querySelectorAll<HTMLElement>('[data-fade-scroll]')");
+  });
+
+  it('the channel pin name keeps its shadow on dark themes only', () => {
+    expect(src('src/components/chat/PinnedBar.tsx')).toContain('var(--pin-name-shadow, 0 1px 2px rgba(0,0,0,0.8))');
+    expect(src('src/mobile/watch/PinnedBanner.tsx')).toContain('var(--pin-name-shadow, 0 1px 2px rgba(0,0,0,0.8))');
+    expect(src('src/styles/globals.css')).toMatch(/html\[data-theme-tone='light'\] \{\s*--pin-name-shadow: none;/);
   });
 });

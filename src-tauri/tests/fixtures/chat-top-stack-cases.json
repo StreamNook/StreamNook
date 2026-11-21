@@ -852,5 +852,117 @@
       "height": 350.0,
       "room_key": ""
     }
+  },
+  {
+    "name": "a_running_hype_train_and_the_pins_floor_are_both_kept_at_380",
+    "request": {
+      "cards": [
+        "hype",
+        "poll",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 380.0,
+      "channel_pin_opened": false,
+      "heights": {},
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "poll",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "floor",
+          "height": 64.0
+        }
+      ],
+      "max_height": 152.0,
+      "height": 136.0,
+      "room_key": ""
+    }
+  },
+  {
+    "name": "a_measured_hype_strip_is_kept_beside_a_taller_pins_floor_at_380",
+    "request": {
+      "cards": [
+        "hype",
+        "poll",
+        "channel_pin",
+        "mention_pins"
+      ],
+      "order": null,
+      "polls_start_collapsed": false,
+      "predictions_start_collapsed": false,
+      "prediction_waiting": false,
+      "opened": null,
+      "folded": [],
+      "chat_height": 380.0,
+      "channel_pin_opened": false,
+      "heights": {
+        "hype": {
+          "strip": 52.0,
+          "open": 52.0,
+          "line": 0.0
+        },
+        "mention_pins": {
+          "strip": 90.0,
+          "open": 240.0,
+          "line": 28.0
+        }
+      },
+      "strips_only": false,
+      "provider": null,
+      "channel": null
+    },
+    "layout": {
+      "slots": [
+        {
+          "kind": "hype",
+          "open": false,
+          "form": "strip",
+          "height": 52.0
+        },
+        {
+          "kind": "poll",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "channel_pin",
+          "open": false,
+          "form": "strip",
+          "height": 36.0
+        },
+        {
+          "kind": "mention_pins",
+          "open": false,
+          "form": "count_line",
+          "height": 28.0
+        }
+      ],
+      "max_height": 152.0,
+      "height": 152.0,
+      "room_key": ""
+    }
   }
 ]

@@ -32,6 +32,7 @@ import { cosmeticsKey } from '../../utils/chatterIdentity';
 import { OVER_VIDEO_CLASS, useOverVideoStyle, useThemeDark } from '../../mobile/chat/overVideo';
 import { Logger } from '../../utils/logger';
 import { edgeFade, readEdges } from '../chat/edgeFade';
+import { BANNER_STYLE, GLAZE_BANNER } from '../ui/glazeButtons';
 import { HOLD_MS, dayLabelFor, mergeHeld } from './pinsHold';
 import type { MentionPin } from '../../types';
 import type { ProviderId } from '../../types/providers';
@@ -399,9 +400,12 @@ export function MentionPinsBlock({
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       const inner = scrollRef.current;
+      // The form that is drawn right now, read from the element (a callback that lands the
+      // frame the form changed would otherwise file the old form's height under the new one).
+      const drawnForm = (el.dataset.mentionPins as PinsForm | undefined) ?? form;
       // A row that grows (an emote or a badge landing) keeps the newest in view and
       // moves the fades.
-      if (form === 'full' && inner) {
+      if (drawnForm === 'full' && inner) {
         if (stuckToEnd.current && !frozenRef.current) inner.scrollTop = inner.scrollHeight;
         syncEdges();
       }
@@ -411,10 +415,10 @@ export function MentionPinsBlock({
       // taller than the floor lost its count line for good). Full: every row plus what is
       // not the scroller (the count line). The other forms: all their content.
       const h =
-        form === 'full' && inner
+        drawnForm === 'full' && inner
           ? inner.scrollHeight + (el.clientHeight - inner.clientHeight)
           : Math.max(el.getBoundingClientRect().height, el.scrollHeight);
-      if (h > 0) onMeasure({ form, height: Math.round(h) });
+      if (h > 0) onMeasure({ form: drawnForm, height: Math.round(h) });
     });
     ro.observe(el);
     if (scrollRef.current) ro.observe(scrollRef.current);
@@ -447,9 +451,11 @@ export function MentionPinsBlock({
   // Over the picture the glaze's thin tint cannot hold the words against a bright frame
   // (the time, the reply line and the count read 1.5:1 on a white menu), so the card takes
   // a real film under the tint, as the other lone surfaces over video do (--glaze-frost).
-  const surface = phone ? 'chrome-glaze !rounded-2xl' : 'glass-flyout rounded-xl';
+  // The one card surface of the stack (hype, votes, channel pin, context card, pins).
+  const surface = GLAZE_BANNER;
   const style: CSSProperties = {
     ...overVideoVars,
+    ...BANNER_STYLE,
     // Inline: `.chrome-glaze` sets the knob itself, so a utility class would lose.
     ...(phone && overVideo ? ({ '--glaze-frost': '55%' } as CSSProperties) : null),
     maxHeight: height && height > 0 ? height : undefined,
