@@ -210,9 +210,14 @@ export function DropsChatBarView({
   onToggle,
   onPreload,
   touch,
+  onTuck,
 }: Pick<DropsChatBarViewProps, 'line' | 'open' | 'onToggle' | 'onPreload'> & {
   /** The phones': tall enough for a thumb, and a tap opens the sheet. */
   touch?: boolean;
+  /** The phones' way to tuck the lip into the thin line on the message box
+   *  (desktop's is the caret on its hover card): a chevron at the lip's end,
+   *  its own thumb-sized target, so it never opens the sheet. */
+  onTuck?: () => void;
 }) {
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
@@ -250,6 +255,19 @@ export function DropsChatBarView({
         </span>
       ) : (
         <Status line={line} short />
+      )}
+      {onTuck && (
+        <button
+          type="button"
+          aria-label="Tuck the drops bar away"
+          onClick={(e) => {
+            e.stopPropagation();
+            onTuck();
+          }}
+          className="-my-1 -mr-2 flex h-9 w-8 shrink-0 items-center justify-center text-textSecondary transition-opacity active:opacity-60"
+        >
+          <CaretDown size={13} weight="bold" aria-hidden />
+        </button>
       )}
     </div>
   );

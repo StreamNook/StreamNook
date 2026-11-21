@@ -46,7 +46,8 @@ export const MobileDropsLip: React.FC<Props> = ({ channelId, login }) => {
         </div>
       ) : (
         // Flush on the composer's top border, so at rest it takes only its
-        // own height from the column. Pull it down to tuck it away.
+        // own height from the column. Its chevron tucks it into the thin line,
+        // as desktop's hover caret does; pulling it down does too.
         <div
           className="relative z-[1] -mb-px shrink-0 touch-none px-2.5 pt-1.5"
           onPointerDown={(e) => {
@@ -77,7 +78,13 @@ export const MobileDropsLip: React.FC<Props> = ({ channelId, login }) => {
           }}
           style={pull > 0 ? { transform: `translateY(${pull * 0.5}px)`, opacity: 1 - pull / (TUCK_PX * 2.4) } : undefined}
         >
-          <DropsChatBarView line={line} open={open} onToggle={() => setOpen(true)} touch />
+          <DropsChatBarView
+            line={line}
+            open={open}
+            onToggle={() => setOpen(true)}
+            touch
+            onTuck={view.lead ? () => tuckDropsLip(true) : undefined}
+          />
         </div>
       )}
       <MobileSheet open={open} onClose={() => setOpen(false)} maxHeightFraction={0.72}>

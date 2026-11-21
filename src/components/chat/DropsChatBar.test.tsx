@@ -370,7 +370,7 @@ describe('the phone lip', () => {
     expect(src).toContain('showsHere(view, channelId, login) ? barLine(view) : null');
   });
   it('is the touch lip, and a tap opens the list in a bottom sheet', () => {
-    const src = lipSrc();
+    const src = lipSrc().replace(/\s+/g, ' ');
     expect(src).toContain('onToggle={() => setOpen(true)} touch');
     const sheet = src.indexOf('<MobileSheet open={open}');
     expect(sheet).toBeGreaterThan(0);
@@ -378,6 +378,14 @@ describe('the phone lip', () => {
     const html = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} touch />);
     expect(html).toContain('h-9');
     expect(html).toContain('border-radius:12px 12px 0 0');
+  });
+  it('tucks into the line with a chevron of its own, as desktop does from its hover card', () => {
+    const src = lipSrc().replace(/\s+/g, ' ');
+    expect(src).toContain('onTuck={view.lead ? () => tuckDropsLip(true) : undefined}');
+    const tuckable = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} touch onTuck={() => {}} />);
+    expect(tuckable).toContain('aria-label="Tuck the drops bar away"');
+    // No lead reward, nothing to tuck: no chevron.
+    expect(renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} touch />)).not.toContain('Tuck the drops bar away');
   });
   it('rises out of the composer for a live Twitch room only', () => {
     const pane = readFileSync(resolve(__dirname, '../../mobile/chat/MobileChatPane.tsx'), 'utf8');
