@@ -9,10 +9,12 @@ import {
   watchingForTitleBar,
 } from '../utils/titleBarTuck';
 import { useStreamOnlyFullscreen } from './useStreamOnlyFullscreen';
+import { useVerticalHidesTitleBar } from './useVerticalLayout';
 
 /**
  * Whether the title bar is in its tucking layout: stream-only full screen, or
- * "Title bar auto-hide" with a stream, VOD or MultiNook grid on screen
+ * "Title bar auto-hide" (or Vertical screens' "Hide title bar" while that
+ * layout is on) with a stream, VOD or MultiNook grid on screen
  * (`watchingForTitleBar`). While true, nothing reserves the bar's 40px and
  * the bar slides away until the pointer reaches the top edge.
  *
@@ -24,9 +26,12 @@ export const useTitleBarAutoHide = (): boolean => {
   const streamOnlyFullscreen = useStreamOnlyFullscreen();
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
   const windowFullscreen = useAppStore((s) => s.isWindowFullscreen);
-  const hideWhileWatching = useAppStore(
+  const hideWhileWatchingChosen = useAppStore(
     (s) => s.settings.video_player?.hide_title_bar_while_watching === true,
   );
+  // Vertical screens keeps only the video and chat on screen by default.
+  const verticalHides = useVerticalHidesTitleBar();
+  const hideWhileWatching = hideWhileWatchingChosen || verticalHides;
   const watching = useAppStore((s) =>
     watchingForTitleBar({ isHomeActive: s.isHomeActive, streamUrl: s.streamUrl, isMultiNookActive }),
   );

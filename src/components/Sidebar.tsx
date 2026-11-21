@@ -24,6 +24,7 @@ import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
 import { useStreamOnlyFullscreen } from '../hooks/useStreamOnlyFullscreen';
 import { useTitleBarAutoHide } from '../hooks/useTitleBarAutoHide';
+import { useVerticalHidesSidebar } from '../hooks/useVerticalLayout';
 
 import { Logger } from '../utils/logger';
 import { IS_LINUX, IS_WEBKITGTK } from '../utils/platform';
@@ -393,8 +394,11 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
     // Whenever the title bar tucks away (that full screen, or "Hide title bar
     // while watching"), nothing reserves its row and the panel runs to the top.
     const titleBarAutoHides = useTitleBarAutoHide();
+    // Vertical screens' "Hide sidebar" does the same while that layout is on,
+    // so only the video and chat stay on screen.
+    const verticalHidesSidebar = useVerticalHidesSidebar();
     const sidebarMode: SidebarMode =
-        streamOnlyFullscreen && chosenSidebarMode !== 'disabled' ? 'hidden' : chosenSidebarMode;
+        (streamOnlyFullscreen || verticalHidesSidebar) && chosenSidebarMode !== 'disabled' ? 'hidden' : chosenSidebarMode;
     const [expandOnHover, setExpandOnHover] = useState(() => {
         const settings = getSidebarSettings();
         return settings.expandOnHover;

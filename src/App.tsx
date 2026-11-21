@@ -29,6 +29,7 @@ import { useChatDockHold, useDockView } from './hooks/useChatDock';
 import { chatKey } from './stores/chatDockStore';
 import ChatDockPane from './components/chat/ChatDockPane';
 import { useTitleBarAutoHide } from './hooks/useTitleBarAutoHide';
+import { useVerticalLayout } from './hooks/useVerticalLayout';
 import { aspectTitleBarReserve } from './utils/titleBarTuck';
 import { useKeybindings } from './keybindings';
 import { useCurrentStreamStats } from './utils/useCurrentStreamStats';
@@ -379,7 +380,12 @@ function App() {
     if (!IS_MOBILE) return;
     return onOrientationChange(() => setIsPortraitNow(isPortrait()));
   }, []);
-  const chatPlacement = IS_MOBILE && isPortraitNow ? 'bottom' : storedChatPlacement;
+  // Vertical screens (Settings > Chat > Chat Placement), the desktop take on
+  // the same idea: while the window is taller than it is wide, the player runs
+  // the full width at 16:9 and chat fills everything under it (globals.css
+  // [data-sn-vertical]). See useVerticalLayout for when it is on.
+  const isVerticalLayout = useVerticalLayout();
+  const chatPlacement = (IS_MOBILE && isPortraitNow) || isVerticalLayout ? 'bottom' : storedChatPlacement;
 
   const [chatSize, setChatSize] = useState(chatPlacement === 'bottom' ? DEFAULT_CHAT_HEIGHT : DEFAULT_CHAT_WIDTH);
   const [modLogsSize, setModLogsSize] = useState(300); // Default Mod Logs size
@@ -629,6 +635,10 @@ function App() {
   // Track previous placement and chat size to detect changes
   const prevChatPlacementRef = useRef(chatPlacement);
   const prevChatSizeRef = useRef(chatPlacement === 'bottom' ? DEFAULT_CHAT_HEIGHT : DEFAULT_CHAT_WIDTH);
+  // Whether the last placement the handler saw came from Vertical screens.
+  const prevVerticalRef = useRef(isVerticalLayout);
+  // Read by the aspect-ratio lock's resize listener, which is set up once.
+  const isVerticalLayoutRef = useRef(isVerticalLayout);
 
   // Refs for aspect ratio lock to avoid stale closures
   const aspectRatioLockEnabledRef = useRef(false);
@@ -671,6 +681,11 @@ function App() {
   // Handle placement changes - preserve video dimensions when moving chat around
   useEffect(() => {
     const handlePlacementChange = async () => {
+      // Read before the early return, so a flip that leaves the placement as
+      // it was (chat already at the bottom) is not counted against the next
+      // real change.
+      const verticalFlip = prevVerticalRef.current !== isVerticalLayout;
+      prevVerticalRef.current = isVerticalLayout;
       if (prevChatPlacementRef.current === chatPlacement) return;
 
       const oldPlacement = prevChatPlacementRef.current;
@@ -683,9 +698,12 @@ function App() {
       Logger.debug('[ChatSize] Setting chat size to', newSize);
       setChatSize(newSize);
 
+      // Vertical screens moved chat because the window changed shape. Resizing
+      // the window to keep the video's size would change that shape again (and
+      // could flip the layout straight back), so the window stays as it is.
       // Auto-hide reveals into the existing video area, so a placement change must
       // NOT resize the window (the chat takes no docked space until you hover it).
-      if (autoHideActive) {
+      if (autoHideActive || verticalFlip) {
         prevChatPlacementRef.current = chatPlacement;
         prevChatSizeRef.current = newSize;
         return;
@@ -812,7 +830,7 @@ function App() {
     handlePlacementChange();
     // autoHideActive: re-read the skip-resize branch when auto-hide toggles (the
     // early return on unchanged placement keeps a bare toggle a no-op here).
-  }, [chatPlacement, isTheaterMode, autoHideActive]);
+  }, [chatPlacement, isTheaterMode, autoHideActive, isVerticalLayout]);
 
   // Listen for badge detail events from chat
   useEffect(() => {
@@ -1658,6 +1676,10 @@ function App() {
   }, [chatPlacement]);
 
   useEffect(() => {
+    isVerticalLayoutRef.current = isVerticalLayout;
+  }, [isVerticalLayout]);
+
+  useEffect(() => {
     isTheaterModeRef.current = isTheaterMode;
   }, [isTheaterMode]);
 
@@ -1690,9 +1712,12 @@ function App() {
     const chatHiddenByPopout = Boolean(activeChatChannelInPopout);
     const placement = chatHiddenByPopout ? 'hidden' : chatPlacement;
     const size = chatHiddenByPopout ? 0 : chatSize;
+    // Vertical screens gives chat whatever the 16:9 player leaves, so there is
+    // no shape to hold the window to: the lock stands down while it is on.
     const enabled =
       (settings.video_player?.lock_aspect_ratio ?? true) &&
       !isTheaterMode &&
+      !isVerticalLayout &&
       Boolean(streamUrl || isMultiNookActive);
 
     const { targetAspectRatio, uiWidthOffset, uiHeightOffset } = measureAspectChrome(
@@ -1730,6 +1755,7 @@ function App() {
     visibleSlotsLength,
     activeChatChannelInPopout,
     aspectBarReserve,
+    isVerticalLayout,
   ]);
 
   // Handle aspect ratio locking when setting changes or chat is resized
@@ -1749,8 +1775,9 @@ function App() {
       const currentIsMultiNookActive = isMultiNookActiveRef.current;
       const multiNookCount = multiNookSlotsLengthRef.current;
 
-      // Don't adjust if in theater mode - theater mode handles its own sizing
-      if (theaterMode || !lockEnabled || (!currentStreamUrl && !currentIsMultiNookActive)) return;
+      // Don't adjust if in theater mode - theater mode handles its own sizing.
+      // Vertical screens has no shape to hold (see the native constraint).
+      if (theaterMode || !lockEnabled || isVerticalLayoutRef.current || (!currentStreamUrl && !currentIsMultiNookActive)) return;
 
       // Prevent re-entrant calls, and stand down while a placement change is
       // mid-resize (that handler preserves the video dimensions; running the
@@ -1850,7 +1877,7 @@ function App() {
       const currentIsMultiNookActive = isMultiNookActiveRef.current;
       const multiNookCount = multiNookSlotsLengthRef.current;
 
-      if (theaterMode || !lockEnabled || (!currentStreamUrl && !currentIsMultiNookActive)) return;
+      if (theaterMode || !lockEnabled || isVerticalLayoutRef.current || (!currentStreamUrl && !currentIsMultiNookActive)) return;
       if (isAdjustingRef.current || placementResizeInProgressRef.current || isTitlebarDragActive()) return;
       isAdjustingRef.current = true;
 
@@ -2256,6 +2283,10 @@ function App() {
                   // the first child (the player) is pinned to a 16:9 band and the
                   // chat panel takes the rest. See src/styles/mobile.css.
                   data-sn-stream-container=""
+                  // Vertical screens: the player takes a 16:9 band of this
+                  // box's width and chat the rest (globals.css). A MultiNook
+                  // grid adds its toolbar on top, so its tile still gets 16:9.
+                  data-sn-vertical={isVerticalLayout ? (isMultiNookActive ? 'nook' : '') : undefined}
                   className={`flex flex-1 h-full overflow-hidden relative ${chatPlacement === 'bottom' ? 'flex-col' : 'flex-row'}`}
                 >
                   <ChannelAboutReveal
@@ -2399,7 +2430,7 @@ function App() {
                           className={`
                             group flex items-center justify-center flex-shrink-0 z-10
                             ${isSideChat ? 'w-1 cursor-ew-resize' : 'h-1 cursor-ns-resize'}
-                            ${fsOverlayActive ? 'hidden' : ''}
+                            ${fsOverlayActive || isVerticalLayout ? 'hidden' : ''}
                           `}
                         >
                           <div
@@ -2415,7 +2446,8 @@ function App() {
                         data-chat-panel="true"
                         {...fsPanelLift}
                         className={`flex-shrink-0 flex flex-col h-full overflow-hidden bg-background ${fsPanelClass}`}
-                        style={fsPanelVars ?? { [isSideChat ? 'width' : 'height']: `${chatSize}px` }}
+                        // Vertical screens: no drag size, chat fills the column.
+                        style={fsPanelVars ?? (isVerticalLayout ? { height: 'auto', flex: '1 1 0%', minHeight: 0 } : { [isSideChat ? 'width' : 'height']: `${chatSize}px` })}
                       >
                         {isMultiNookActive && <Suspense fallback={null}><MultiNookChatSwitcher /></Suspense>}
                         <div className="flex-1 overflow-hidden relative">
