@@ -2,7 +2,7 @@
 // SN-284: a jump lands below the floating stack, and a pinned row (hosted by
 // data-pin-id, outside the list) can never be the row a jump finds.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { scrollChatToMessage, targetFor } from './scrollChatToMessage';
+import { scrollChatToMessage, stackInsetOf, targetFor } from './scrollChatToMessage';
 
 function setup() {
   document.body.innerHTML = `
@@ -42,6 +42,20 @@ describe('scrollChatToMessage', () => {
     list.scrollTo = scrollTo as unknown as typeof list.scrollTo;
     expect(scrollChatToMessage('m1', { smooth: false, topInset: 120 })).toBe(true);
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000 - 120 - 140 + 15, behavior: 'auto' });
+  });
+
+  it('lands below the stack its pane states, with no option from the caller (the phone pane)', () => {
+    vi.useFakeTimers();
+    const { list } = setup();
+    document.getElementById('pane')!.setAttribute('data-stack-bottom', '120');
+    expect(stackInsetOf(list)).toBe(120);
+    const scrollTo = vi.fn();
+    list.scrollTo = scrollTo as unknown as typeof list.scrollTo;
+    expect(scrollChatToMessage('m1', { smooth: false })).toBe(true);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000 - 120 - 140 + 15, behavior: 'auto' });
+    // A stack of zero (nothing floating) is the plain center.
+    document.getElementById('pane')!.setAttribute('data-stack-bottom', '0');
+    expect(stackInsetOf(list)).toBe(0);
   });
 
   it('returns false when only a pin carries the id', () => {

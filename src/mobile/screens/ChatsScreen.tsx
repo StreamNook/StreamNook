@@ -8,7 +8,7 @@
 // restores them at launch without joining). While it is in front it keeps the
 // phone awake, until Rust's idle span passes with no touch, so a phone left on
 // a desk still sleeps.
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatsCircle, MonitorPlay, Play, Plus } from 'phosphor-react';
 import { ChatsMinimizeButton } from '../chat/ChatsMinimizeButton';
 import { useAppStore } from '../../stores/AppStore';
@@ -20,6 +20,8 @@ import { ChatPicker } from '../chat/ChatPicker';
 import { useChatTabsStore, type ChatTab } from '../chat/chatTabsStore';
 import { useRoomPins } from '../chat/useRoomPins';
 import { PinnedBanner } from '../watch/PinnedBanner';
+import { ChatOverlayStack } from '../../components/chat/ChatOverlayStack';
+import { useChatTopStack } from '../../components/chat/chatTopStack';
 import { usePinsOpen } from '../watch/pinsOpen';
 import { holdScreenOn } from '../nativeBridge';
 import { useMobileNavStore } from '../navStore';
@@ -102,11 +104,10 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
   // Messages > Collapsed says, and a tap holds until the chat switches.
   const chatChannelId = useActiveChatChannelId();
   const pins = usePinsOpen();
-  const pinsOpen = pins.open;
-  // The closed banner's height: the list starts under it. Opened, the banner
-  // floats over the rows, so nothing below it moves.
-  const pinsRef = useRef<HTMLDivElement | null>(null);
-  const [pinsBox, setPinsBox] = useState(0);
+  // The top-of-chat stack floats over the list: the list never makes room for it
+  // in the flow, it gets a spacer as tall as the stack (SN-284).
+  const [columnEl, setColumnEl] = useState<HTMLDivElement | null>(null);
+  const [stackBottom, setStackBottom] = useState(0);
 
   // The first look joins the saved chats. Only while the page is seen: a set
   // parked in the background comes back with the return (lifecycle's
@@ -120,24 +121,8 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
   useReadingAwake(shown && keepOn && tabs.length > 0, idleSecs);
 
   const pinned = useRoomPins(shown && tabs.length > 0);
-  // Folded with Style set to Hidden, a pin draws nothing and holds no room.
-  const hasPins = pinned.length > 0 && (pinsOpen || pins.style !== 'hidden');
-  useLayoutEffect(() => {
-    const el = pinsRef.current;
-    if (!hasPins || !el) {
-      setPinsBox(0);
-      return;
-    }
-    const read = () => {
-      if (!pinsOpen) setPinsBox(el.offsetHeight);
-    };
-    read();
-    const observer = new ResizeObserver(read);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasPins, pinsOpen]);
   // Mentions pinned over the room on screen (SN-284), and the card for one
-  // too old to scroll to. They float over the list (never in pinsBox), so the
+  // too old to scroll to. They float over the list (never in the flow), so the
   // rows never move when one comes or goes. Nothing is asked while hidden.
   // The Chats tab's chat is out of sight while another tab is in front or the
   // full player is up over it (the pins' clocks count only what is in front).
@@ -154,6 +139,17 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
   const mentionCard = useMentionsStore((s) => s.contextCard);
   const showMentionCard = shown && !!mentionCard && mentionCard.room === activeChannel;
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
+  // The room's top-of-chat stack, laid out by Rust: the channel's pinned message
+  // (open or folded in the one per-room store the watch screen and the composer's
+  // menu share), the mention you opened and the mentions pinned for you.
+  const topStack = useChatTopStack(columnEl, {
+    surface: 'phone-chats',
+    phone: true,
+    provider: active?.provider ?? null,
+    channel: active?.channel ?? null,
+    channelPinOpened: pins.open,
+    onChannelPinOpen: pins.setOpen,
+  });
   // The room the watch layer shows now (playing, loading, or its offline room):
   // nothing to start for it. Read from the player's own state, which lets go the
   // moment a close begins (Close video lands here), not from the stream tab's
@@ -409,40 +405,51 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
         </div>
       ) : (
         <>
-          <div className="flex-1 min-h-0 relative flex flex-col">
-            {hasPins && (
-              // A grabber's gap under the header, 4 px over the list.
-              <div
-                ref={pinsRef}
-                className="absolute left-0 right-0 top-0 px-2.5 pt-3 pb-1 z-20 pointer-events-none flex flex-col gap-1"
-              >
-                <PinnedBanner
-                  pins={pinned}
-                  channelId={chatChannelId ?? undefined}
-                  expanded={pinsOpen}
-                  onToggle={() => pins.setOpen(!pinsOpen)}
-                  collapsedStyle={pins.style}
-                />
-              </div>
-            )}
-            {hasPins && <div className="shrink-0" style={{ height: pinsBox }} />}
-            {(mentionPins.pins.length > 0 || showMentionCard) && (
-              // Under the room's own pin (z-19: its open card floats over these).
-              <div
-                className={`absolute left-0 right-0 px-2.5 z-[19] pointer-events-none flex flex-col gap-1 ${hasPins ? 'pt-0.5' : 'pt-3'}`}
-                style={{ top: hasPins ? pinsBox : 0 }}
-              >
-                {showMentionCard && mentionCard && <MentionContextCard entry={mentionCard} />}
-                <PhonePins
-                  key={activeChannel ?? ''}
-                  pins={mentionPins.pins}
-                  shown={mentionPins.shown}
-                  reportVisible={mentionPins.reportVisible}
-                  inboxSurface="chats"
-                />
-              </div>
-            )}
-            <MobileChatPane strip={false} paused={!shown} idle={idle} surface="chats" />
+          <div ref={setColumnEl} className="flex-1 min-h-0 relative flex flex-col">
+            <MobileChatPane
+              strip={false}
+              paused={!shown}
+              idle={idle}
+              surface="chats"
+              topInset={stackBottom}
+              top={
+                <ChatOverlayStack
+                  top={0}
+                  phone
+                  maxHeight={topStack.maxHeight}
+                  more={topStack.more}
+                  onBottom={setStackBottom}
+                  // A grabber's gap under the header.
+                  className="!left-0 !right-0 px-2.5 pt-3"
+                >
+                  <PinnedBanner
+                    pins={pinned}
+                    channelId={chatChannelId ?? undefined}
+                    expanded={pins.open}
+                    onToggle={() => pins.setOpen(!pins.open)}
+                    collapsedStyle={pins.style}
+                    stack={topStack.control.channel_pin}
+                    measure={topStack.measure}
+                  />
+                  {showMentionCard && mentionCard && (
+                    <MentionContextCard
+                      entry={mentionCard}
+                      stack={topStack.control.mention_context}
+                      measure={topStack.measure}
+                    />
+                  )}
+                  <PhonePins
+                    key={activeChannel ?? ''}
+                    pins={mentionPins.pins}
+                    shown={mentionPins.shown}
+                    reportVisible={mentionPins.reportVisible}
+                    inboxSurface="chats"
+                    stack={topStack.control.mention_pins}
+                    measure={topStack.measure}
+                  />
+                </ChatOverlayStack>
+              }
+            />
           </div>
         </>
       )}

@@ -5,7 +5,7 @@
 // Their rules live in verticalChatParts.ts and verticalView.ts. The iPhone's
 // twin is Watch/VerticalChat.swift.
 import React from 'react';
-import { At, ChatTeardropText } from 'phosphor-react';
+import { ChatTeardropText } from 'phosphor-react';
 import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useMissedCount } from './verticalChatParts';
 import { missedSpoken, missedWords, type VerticalChatState } from './verticalView';
@@ -61,18 +61,4 @@ export const VerticalChatHandle: React.FC<React.HTMLAttributes<HTMLDivElement>> 
     {/* glass-exempt: a grabber mark, not a surface */}
     <span aria-hidden className="pointer-events-none h-[5px] w-9 rounded-full bg-textMuted/55" />
   </div>
-);
-
-/** A mention's card, folded to one line in the lower third; a tap grows the
- *  chat with the card in it. */
-export const VerticalMentionStrip: React.FC<{ onOpen: () => void }> = ({ onOpen }) => (
-  <button
-    type="button"
-    onClick={onOpen}
-    aria-label="You were mentioned. Opens the chat"
-    className="sn-popover sn-popover--static pointer-events-auto flex h-7 w-fit max-w-full items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium text-textPrimary"
-  >
-    <At size={11} weight="bold" className="shrink-0 text-accent" />
-    <span className="truncate">You were mentioned</span>
-  </button>
 );

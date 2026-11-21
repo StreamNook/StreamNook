@@ -56,7 +56,7 @@ describe('chat top stack: the TS shapes match Rust', () => {
     expect(desktop).toContain('useChatTopStack(chatContainerEl, {');
     expect(desktop).toContain('maxHeight={topStack.maxHeight}');
     const phone = read('src/mobile/screens/WatchScreen.tsx');
-    expect(phone).toContain('useChatTopStack(chatColumnEl)');
+    expect(phone).toContain('useChatTopStack(chatColumnEl, {');
     // Drops progress is the lip on the composer now, never a card up here.
     expect(phone).not.toContain('topStack.control.drop');
     expect(phone).not.toContain('DropProgressBar');

@@ -28,8 +28,15 @@ export interface ScrollToMessageOptions {
   root?: ParentNode | null;
   /** The height at the top of the list that the floating top-of-chat stack
    *  covers (its drawn bottom minus the list's top). The message lands in the
-   *  part below it, never under a card (SN-284). Default 0. */
+   *  part below it, never under a card (SN-284). Default: what the pane around
+   *  the list says in `data-stack-bottom` (the phone chat pane), else 0. */
   topInset?: number;
+}
+
+/** The stack height a pane states for its list (`data-stack-bottom`), 0 without one. */
+export function stackInsetOf(el: Element): number {
+  const v = Number(el.closest<HTMLElement>('[data-stack-bottom]')?.dataset.stackBottom);
+  return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 /** How long a jumped-to row flashes. Matches the CSS animation. */
@@ -98,7 +105,7 @@ export function scrollChatToMessage(
   messageId: string,
   options?: ScrollToMessageOptions,
 ): boolean {
-  const { align = 'center', smooth = true, flash = false, root = null, topInset = 0 } = options ?? {};
+  const { align = 'center', smooth = true, flash = false, root = null } = options ?? {};
   const scope = root ?? document;
 
   const el = scope.querySelector<HTMLElement>(
@@ -110,7 +117,9 @@ export function scrollChatToMessage(
   if (!container) return false;
 
   const behavior: ScrollBehavior = smooth ? 'smooth' : 'auto';
-  container.scrollTo({ top: targetFor(container, el, align, topInset), behavior });
+  // Read again on the correction pass: the stack may have moved since.
+  const insetFor = (row: Element) => options?.topInset ?? stackInsetOf(row);
+  container.scrollTo({ top: targetFor(container, el, align, insetFor(el)), behavior });
   if (flash) flashChatMessage(messageId, root);
 
   // One correction pass, and it is not optional on mobile.
@@ -126,7 +135,7 @@ export function scrollChatToMessage(
     );
     const c = again?.closest<HTMLElement>('.overflow-y-auto');
     if (!again || !c) return;
-    const target = targetFor(c, again, align, topInset);
+    const target = targetFor(c, again, align, insetFor(again));
     // Only correct a drift worth correcting; a second glide over a few pixels
     // reads as a wobble.
     if (Math.abs(c.scrollTop - target) > 8) {

@@ -6,6 +6,9 @@
 
 import { useCallback, useMemo } from 'react';
 import { MentionPinsBlock, type PinsForm } from '../../components/mentions/MentionPins';
+import { pinsFormOf, pinsMeasureForm } from '../../components/mentions/pinsForm';
+import { StackCard } from '../../components/chat/ChatOverlayStack';
+import { useCardPresence, type StackCardControl, type StackKind } from '../../components/chat/chatTopStack';
 import { roomRef, useMentionPins, usePinSurface } from '../../hooks/useMentionPins';
 import { usePageVisible } from '../../hooks/useChatSurfaceShown';
 import { chatSurfaceShown } from '../../utils/chatSurfaceShown';
@@ -89,6 +92,8 @@ export function PhonePins({
   overVideo = false,
   onBeforeOpen,
   onMeasure,
+  stack,
+  measure,
 }: {
   pins: readonly MentionPin[];
   shown: boolean;
@@ -101,7 +106,21 @@ export function PhonePins({
   /** The lower third grows the chat first. */
   onBeforeOpen?: () => void;
   onMeasure?: (m: { form: PinsForm; height: number }) => void;
+  /** The pins as the `mention_pins` card of the top-of-chat stack: Rust's slot
+   *  gives the form, the height and the folded-card count (the lower third's
+   *  is strips only, so its form is the floor), and the block's drawn heights
+   *  go back to the stack's cache. */
+  stack?: StackCardControl;
+  measure?: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
 }) {
+  useCardPresence(stack, stack && pins.length > 0 ? 'pins' : null);
+  const reportMeasure = useCallback(
+    (m: { form: PinsForm; height: number }) => {
+      onMeasure?.(m);
+      measure?.('mention_pins', pinsMeasureForm(m.form), m.height);
+    },
+    [measure, onMeasure],
+  );
   const openOwn = useCallback(
     (pin: MentionPin) => {
       onBeforeOpen?.();
@@ -117,6 +136,27 @@ export function PhonePins({
     [inboxSurface, onBeforeOpen],
   );
   if (pins.length === 0) return null;
+  if (stack) {
+    // No slot (not placed, or folded into the count of another card): nothing drawn.
+    if (!stack.placed || stack.form === 'folded') return null;
+    return (
+      <StackCard kind="mention_pins" control={stack} className="w-full">
+        <MentionPinsBlock
+          pins={pins}
+          form={pinsFormOf(stack.form)}
+          height={stack.height}
+          moreCards={stack.moreCards}
+          shown={shown}
+          phone
+          overVideo={overVideo}
+          reportVisible={reportVisible}
+          onOpenOwn={openOwn}
+          onOpenOther={openOther}
+          onMeasure={reportMeasure}
+        />
+      </StackCard>
+    );
+  }
   return (
     <MentionPinsBlock
       pins={pins}

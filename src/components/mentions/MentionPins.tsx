@@ -333,6 +333,7 @@ export function MentionPinsBlock({
   // Not mounted any more: nothing of it is in view.
   useEffect(() => () => reportVisible?.([]), [reportVisible]);
 
+  const shownPinsLength = shownPins.length;
   // ---- the newest stays in view -------------------------------------------
   const lastId = shownPins[shownPins.length - 1]?.entry.id;
   const stuckToEnd = useRef(true);
@@ -343,6 +344,20 @@ export function MentionPinsBlock({
   }, [lastId, form, frozen, shownPins.length]);
 
   // ---- measuring (the stack keeps the last height of each form) -----------
+  // The list pans only when its rows overflow, and only from a touch that starts
+  // on a row; otherwise a touch on it is just a tap and never a scroll.
+  useEffect(() => {
+    const inner = scrollRef.current;
+    if (!inner || typeof ResizeObserver === 'undefined') return;
+    const sync = () => {
+      inner.style.touchAction = inner.scrollHeight > inner.clientHeight + 1 ? 'pan-y' : 'none';
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [form, shownPinsLength]);
+
   useEffect(() => {
     const el = rootRef.current;
     if (!el || !onMeasure || typeof ResizeObserver === 'undefined') return;

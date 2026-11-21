@@ -54,7 +54,12 @@ export function useStackBottom(top: number, onBottom?: (bottom: number) => void)
   const [height, setHeight] = useState(0);
   useEffect(() => {
     if (!el) return;
-    const read = () => setHeight(Math.round(el.getBoundingClientRect().height));
+    // Only what is drawn counts: cards Rust folded stay mounted, hidden, and the
+    // column's own padding is not a stack.
+    const read = () => {
+      const drawn = Array.from(el.children).some((c) => c.getBoundingClientRect().height > 0);
+      setHeight(drawn ? Math.round(el.getBoundingClientRect().height) : 0);
+    };
     read();
     const ro = new ResizeObserver(read);
     ro.observe(el);

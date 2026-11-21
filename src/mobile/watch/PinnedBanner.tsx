@@ -20,6 +20,9 @@ import { usePinStore } from '../../stores/pinStore';
 import { Logger } from '../../utils/logger';
 import { useChatTabsStore } from '../chat/chatTabsStore';
 import { isModeratorFrom } from '../chat/modActions';
+import { StackCard } from '../../components/chat/ChatOverlayStack';
+import { pinnedStackId } from '../../components/chat/PinnedBar';
+import type { StackCardControl, StackKind } from '../../components/chat/chatTopStack';
 
 export interface PinnedItem {
   id: string;
@@ -41,6 +44,11 @@ interface Props {
   channelId?: string;
   /** Chat > Pinned Messages > Style: `hidden` draws nothing while the pin is folded. */
   collapsedStyle?: 'bar' | 'hidden';
+  /** The pin as the `channel_pin` card of the top-of-chat stack (SN-284): Rust
+   *  says whether it is open or a strip, a tap goes through the stack (which
+   *  writes the one open store back), and `expanded` is only the store's value. */
+  stack?: StackCardControl;
+  measure?: (kind: StackKind, form: 'strip' | 'open' | 'line', height: number) => void;
 }
 
 // Lifts an unpainted name off the glass; a 7TV paint brings its own shadow.
@@ -67,7 +75,24 @@ const UnpinButton: React.FC<{ broadcasterId: string; messageId: string }> = ({ b
   </button>
 );
 
-export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channelId, collapsedStyle = 'bar' }) => {
+export const PinnedBanner: React.FC<Props> = ({
+  pins,
+  expanded: storeOpen,
+  onToggle: onStoreToggle,
+  channelId,
+  collapsedStyle = 'bar',
+  stack,
+  measure,
+}) => {
+  const onPresence = stack?.onPresence;
+  const stackId = pinnedStackId(pins, storeOpen, collapsedStyle);
+  React.useEffect(() => {
+    onPresence?.(stackId);
+  }, [onPresence, stackId]);
+  React.useEffect(() => () => onPresence?.(null), [onPresence]);
+  // In the stack Rust's form says whether it is open; a tap goes through it.
+  const expanded = stack ? stack.placed && stack.form === 'open' : storeOpen;
+  const onToggle = stack ? stack.onToggle : onStoreToggle;
   const activeRoom = useChatTabsStore((s) => {
     const t = s.tabs.find((tab) => tab.channel === s.activeChannel);
     return t?.provider === 'twitch' ? t.channel : null;
@@ -83,8 +108,9 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
   // Hidden: nothing over chat while folded, as on the desktop. The composer
   // menu's "Pinned message" opens it (the desktop's is the pin in its header).
   if (!expanded && collapsedStyle === 'hidden') return null;
+  if (stack && (!stack.placed || stack.form === 'folded')) return null;
 
-  return (
+  const box = (
     // The single container. Everything below lives inside this one box.
     <div
       ref={rootRef}
@@ -187,5 +213,12 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
         )}
       </AnimatePresence>
     </div>
+  );
+  return stack ? (
+    <StackCard kind="channel_pin" control={stack} measure={measure}>
+      {box}
+    </StackCard>
+  ) : (
+    box
   );
 };
