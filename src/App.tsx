@@ -391,7 +391,24 @@ function App() {
   const isSideChat = chatPlacement === 'right' || chatPlacement === 'left';
   const autoHideActive = chatAutoHide && isSideChat;
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
-  const isChatHidden = usemultiNookStore((s) => s.isChatHidden);
+  // Sliced gives every tile its own chat under it, so the shared panel steps
+  // aside; it is back while one tile fills the space, which has no slice chat.
+  const nookSlicesHaveChat = usemultiNookStore(
+    (s) => !s.slots.some((x) => x.id === s.maximizedSlotId && !x.isMinimized),
+  ) && settings.multi_nook_layout?.mode === 'sliced';
+  const userChatHidden = usemultiNookStore((s) => s.isChatHidden);
+  const isChatHidden = userChatHidden || nookSlicesHaveChat;
+  // Entering or leaving Sliced moves the panel in one step, in the frame the
+  // tiles start to move: a spring here resized the stage on every frame of
+  // their glide, so they chased a moving target. The Hide chat button keeps
+  // its spring. Held until the next change, so a re-render mid-way does not
+  // bring the spring back.
+  const [panelSnap, setPanelSnap] = useState(false);
+  const [panelSeen, setPanelSeen] = useState({ sliced: nookSlicesHaveChat, user: userChatHidden });
+  if (panelSeen.sliced !== nookSlicesHaveChat || panelSeen.user !== userChatHidden) {
+    setPanelSnap(panelSeen.sliced !== nookSlicesHaveChat);
+    setPanelSeen({ sliced: nookSlicesHaveChat, user: userChatHidden });
+  }
   // Whether the chat panel is on screen at all: a placement other than Hidden,
   // something with chat (live, offline chat, a replay with a channel, or a
   // MultiNook grid), and not owned by a MultiChat popout. A channel open in a
@@ -2384,7 +2401,7 @@ function App() {
                         width: isSideChat ? ((isMultiNookActive && isChatHidden) ? 0 : 'auto') : '100%',
                         height: chatPlacement === 'bottom' ? ((isMultiNookActive && isChatHidden) ? 0 : 'auto') : '100%'
                       }}
-                      transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                      transition={panelSnap ? { duration: 0 } : { type: "spring", stiffness: 350, damping: 25 }}
                       // Left dock reverses the children so the resize separator sits
                       // on the video-facing (right) side of the chat, and order-first
                       // moves the whole panel ahead of the video.

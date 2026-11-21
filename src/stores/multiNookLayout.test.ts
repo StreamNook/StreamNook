@@ -158,4 +158,11 @@ describe('reconcileTileCaps', () => {
     await usemultiNookStore.getState().reconcileTileCaps();
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it('caps nothing in Sliced, where every tile is the same size', async () => {
+    setLayout({ mode: 'sliced', small_quality_cap: 480 });
+    usemultiNookStore.setState({ slots: [loaded('a'), loaded('b')] });
+    await usemultiNookStore.getState().reconcileTileCaps();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
