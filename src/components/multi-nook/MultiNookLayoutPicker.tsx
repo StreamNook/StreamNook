@@ -4,12 +4,15 @@
 // you get, and it follows the size slider as it moves. The choice is a setting
 // Rust keeps (settings.multi_nook_layout); the store's setLayout saves it.
 //
+// Sliced comes from the Kudos RP live page's multi-view (live.kudosrp.gg):
+// slices side by side that each carry their own chat.
+//
 // The body is the menu glass (`glass-flyout`); the choices are the glazed
 // capsules, the chosen one filled with the accent. Both go solid at 0%
 // Glassiness.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { LayoutGrid, PanelBottom, PanelRight } from 'lucide-react';
+import { Columns3, LayoutGrid, PanelBottom, PanelRight } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 import { useAppStore } from '../../stores/AppStore';
@@ -21,6 +24,7 @@ const MODES: Array<{ mode: MultiNookLayoutMode; label: string; detail: string; I
   { mode: 'grid', label: 'Grid', detail: 'Every stream the same size', Icon: LayoutGrid },
   { mode: 'main_row', label: 'Main + row', detail: 'One large stream, the rest below it', Icon: PanelBottom },
   { mode: 'main_column', label: 'Main + column', detail: 'One large stream, the rest beside it', Icon: PanelRight },
+  { mode: 'sliced', label: 'Sliced', detail: 'Side by side, each stream with its own chat', Icon: Columns3 },
 ];
 
 const CAPS: Array<{ value: number | null; label: string }> = [
@@ -33,16 +37,42 @@ const CAPS: Array<{ value: number | null; label: string }> = [
 const PREVIEW_W = 84;
 const PREVIEW_H = 48;
 
+/** A slice in the picture: the video, and the chat under it fainter. A real
+ *  slice keeps a chat floor a thumbnail has no room for, so Sliced is drawn
+ *  to scale by hand instead of by the engine. */
+function slicePreview(count: number) {
+  const n = Math.min(count, 4);
+  const gap = 3;
+  const w = (PREVIEW_W - (n - 1) * gap) / n;
+  const videoH = Math.round(w / (16 / 9));
+  return Array.from({ length: n }, (_, i) => {
+    const x = i * (w + gap);
+    return [
+      { x, y: 0, w, h: videoH, opacity: 0.6 },
+      { x, y: videoH + 2, w, h: PREVIEW_H - videoH - 2, opacity: 0.25 },
+    ];
+  }).flat();
+}
+
 /** The layout as it will look, in miniature. */
 function LayoutPreview({ mode, count, share }: { mode: MultiNookLayoutMode; count: number; share: number }) {
-  const places = nookLayout(PREVIEW_W, PREVIEW_H, count, mode, share, 3);
+  const boxes =
+    mode === 'sliced'
+      ? slicePreview(count)
+      : nookLayout(PREVIEW_W, PREVIEW_H, count, mode, share, 3).map((p) => ({
+          x: p.x,
+          y: p.y,
+          w: p.w,
+          h: p.h,
+          opacity: p.main ? 0.85 : 0.4,
+        }));
   return (
     <span className="relative block" style={{ width: PREVIEW_W, height: PREVIEW_H }} aria-hidden>
-      {places.map((p, i) => (
+      {boxes.map((b, i) => (
         <span
           key={i}
           className="pointer-events-none absolute rounded-[3px] bg-current"
-          style={{ left: p.x, top: p.y, width: p.w, height: p.h, opacity: p.main ? 0.85 : 0.4 }}
+          style={{ left: b.x, top: b.y, width: b.w, height: b.h, opacity: b.opacity }}
         />
       ))}
     </span>
@@ -61,7 +91,8 @@ export default function MultiNookLayoutPicker() {
   const close = useCallback(() => setIsOpen(false), []);
 
   const share = draftShare ?? layout.strip_share;
-  const mainLayout = layout.mode !== 'grid';
+  // Only the main layouts have small streams to size and hold to a quality.
+  const mainLayout = layout.mode === 'main_row' || layout.mode === 'main_column';
   // Few streams draw a poor picture of a layout; show at least four.
   const previewCount = Math.min(9, Math.max(4, visibleCount));
   const Current = MODES.find((m) => m.mode === layout.mode)?.Icon ?? LayoutGrid;
@@ -116,7 +147,7 @@ export default function MultiNookLayoutPicker() {
           aria-pressed={isOpen}
           aria-label="Layout"
           aria-haspopup="dialog"
-          className={`titlebar-icon-btn ${isOpen ? 'is-active !text-accent' : mainLayout ? '!text-accent' : 'hover:!text-accent'}`}
+          className={`titlebar-icon-btn ${isOpen ? 'is-active !text-accent' : layout.mode !== 'grid' ? '!text-accent' : 'hover:!text-accent'}`}
         >
           <Current size={16} />
         </button>
@@ -131,7 +162,7 @@ export default function MultiNookLayoutPicker() {
           ref={menuRef}
           role="dialog"
           aria-label="Layout"
-          className="glass-flyout w-[22rem] !p-3"
+          className="glass-flyout w-[29rem] !p-3"
           style={{ position: 'fixed', top: menuPos.top, right: menuPos.right, zIndex: 9999 }}
         >
           <div className="mb-2.5 flex items-baseline justify-between">
@@ -141,7 +172,7 @@ export default function MultiNookLayoutPicker() {
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Layout">
+          <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Layout">
             {MODES.map(({ mode, label, detail }) => {
               const on = layout.mode === mode;
               return (

@@ -1176,6 +1176,8 @@ pub enum MultiNookLayoutMode {
     MainRow,
     /// The first tile large, the rest in a strip beside it.
     MainColumn,
+    /// Every tile a slice with its own chat under it.
+    Sliced,
 }
 
 /// The MultiNook layout. Read leniently (see its `Deserialize`): settings load
@@ -1198,10 +1200,11 @@ impl MultiNookLayout {
     /// The heights the small-tile cap may take.
     pub const CAPS: [u32; 3] = [720, 480, 360];
 
-    /// Whether a tile in this spot plays under the cap. Grid has no small tiles.
+    /// Whether a tile in this spot plays under the cap. Grid and Sliced have
+    /// no small tiles.
     pub fn caps_small_tiles(&self) -> Option<u32> {
         match self.mode {
-            MultiNookLayoutMode::Grid => None,
+            MultiNookLayoutMode::Grid | MultiNookLayoutMode::Sliced => None,
             _ => self.small_quality_cap,
         }
     }
@@ -3549,6 +3552,18 @@ mod backup_persistence_tests {
         assert_eq!(back.multi_nook_layout.caps_small_tiles(), Some(480));
         let grid = MultiNookLayout { mode: MultiNookLayoutMode::Grid, ..s.multi_nook_layout.clone() };
         assert_eq!(grid.caps_small_tiles(), None, "a grid has no small tiles");
+    }
+
+    #[test]
+    fn a_sliced_layout_round_trips_and_caps_nothing() {
+        let mut s = Settings::default();
+        s.multi_nook_layout =
+            MultiNookLayout { mode: MultiNookLayoutMode::Sliced, strip_share: 0.25, small_quality_cap: Some(360) };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"mode\":\"sliced\""));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.multi_nook_layout.mode, MultiNookLayoutMode::Sliced);
+        assert_eq!(back.multi_nook_layout.caps_small_tiles(), None, "slices are all the same size");
     }
 
     #[test]

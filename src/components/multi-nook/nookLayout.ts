@@ -1,10 +1,11 @@
 // Where every MultiNook tile goes, for the stage's live size.
 //
 // One engine for every layout, all absolute rectangles: Grid (every tile the
-// same size, the short row on top), and the main layouts (the first tile large,
-// the rest small in a strip below or beside it). Tiles are positioned, never
-// re-ordered in the DOM, so changing layout or swapping the main tile is a
-// restyle and no player is rebuilt.
+// same size, the short row on top), the main layouts (the first tile large,
+// the rest small in a strip below or beside it) and Sliced (every tile a
+// column with its own chat under it). Tiles are positioned, never re-ordered
+// in the DOM, so changing layout or swapping the main tile is a restyle and no
+// player is rebuilt.
 //
 // This runs in the page because its input is the stage's pixel size from a
 // ResizeObserver, every frame of a resize, and its output is only CSS. The
@@ -26,6 +27,8 @@ export interface TilePlace extends Rect {
   tier: SizeTier;
   /** The large tile of a main layout. */
   main: boolean;
+  /** Sliced: where this tile's own chat goes, under its video. */
+  chat?: Rect;
 }
 
 const RATIO = 16 / 9;
@@ -33,6 +36,11 @@ export const GAP = 8;
 /** Below these widths the tile chrome trims down. */
 export const COMPACT_BELOW = 360;
 export const MINI_BELOW = 220;
+
+/** Sliced: a slice narrower than this is too thin for a chat, so they wrap to another row. */
+export const MIN_SLICE_W = 260;
+/** Sliced: the least height a slice's chat keeps; the video gives way to it. */
+export const MIN_SLICE_CHAT_H = 150;
 
 export function tierFor(width: number): SizeTier {
   if (width < MINI_BELOW) return 'mini';
@@ -85,11 +93,65 @@ export function gridRects(box: Rect, n: number, gap = GAP): Rect[] {
 }
 
 /**
+ * Sliced: `n` slices side by side, each a 16:9 video with its chat under it.
+ * One row while every slice keeps `MIN_SLICE_W`; past that they wrap into as
+ * few rows as will hold them, the short row on top as in Grid. A slice whose
+ * video would leave its chat under `MIN_SLICE_CHAT_H` gives the video less
+ * height (centred) instead. Empty when the stage cannot hold a chat at all.
+ */
+export function slicedRects(box: Rect, n: number, gap = GAP): Array<{ video: Rect; chat: Rect }> {
+  if (n <= 0 || box.w <= 0 || box.h <= 0) return [];
+  // The fewest rows whose slices are wide enough with the video at full
+  // width. On a stage where no row count manages both, the one that keeps the
+  // most video, a slice under the width counting for less.
+  let best: { rows: number; cols: number; w: number; h: number; score: number } | null = null;
+  for (let rows = 1; rows <= n; rows++) {
+    const cols = Math.ceil(n / rows);
+    const w = Math.floor((box.w - (cols - 1) * gap) / cols);
+    const h = Math.floor((box.h - (rows - 1) * gap) / rows);
+    const room = h - gap - MIN_SLICE_CHAT_H;
+    if (w <= 0 || room <= 0) continue;
+    const size = { rows, cols, w, h, score: Math.min(w / RATIO, room) * Math.min(1, w / MIN_SLICE_W) };
+    if (w >= MIN_SLICE_W && w / RATIO <= room) {
+      best = size;
+      break;
+    }
+    if (!best || size.score > best.score) best = size;
+  }
+  // The chat keeps its floor, or the stage is too small to slice.
+  if (!best) return [];
+  const { cols, rows, w, h } = best;
+  const videoH = Math.floor(Math.min(w / RATIO, h - gap - MIN_SLICE_CHAT_H));
+  if (videoH <= 0) return [];
+  const videoW = Math.min(w, Math.floor(videoH * RATIO));
+  const short = n % cols;
+  const out: Array<{ video: Rect; chat: Rect }> = [];
+  let y = box.y;
+  for (let r = 0; r < rows; r++) {
+    const k = r === 0 && short > 0 ? short : cols;
+    let x = box.x + (box.w - (k * w + (k - 1) * gap)) / 2;
+    for (let i = 0; i < k; i++) {
+      const left = Math.round(x);
+      const top = Math.round(y);
+      out.push({
+        video: { x: left + Math.round((w - videoW) / 2), y: top, w: videoW, h: videoH },
+        chat: { x: left, y: top + videoH + gap, w, h: h - videoH - gap },
+      });
+      x += w + gap;
+    }
+    y += h + gap;
+  }
+  return out;
+}
+
+/**
  * Rectangles for `count` visible tiles in a `width` x `height` stage. In a
  * main layout the first tile is large and `share` (0.15 to 0.40) of the stage
  * goes to the strip of small tiles: its height below the main tile, its width
  * beside it. The strip is filled by the grid solver, so any number of small
  * tiles fits without scrolling. The whole arrangement is centred.
+ *
+ * Sliced gives every tile a `chat` rectangle under its video.
  */
 export function nookLayout(
   width: number,
@@ -102,15 +164,20 @@ export function nookLayout(
   const stage: Rect = { x: 0, y: 0, w: width, h: height };
   const place = (r: Rect, main = false): TilePlace => ({ ...r, tier: tierFor(r.w), main });
   if (count <= 0 || width <= 0 || height <= 0) return [];
-  // An unknown mode (a preset from a newer build) reads as Grid, as Rust reads it.
-  if ((mode !== 'main_row' && mode !== 'main_column') || count === 1) {
-    return gridRects(stage, count, gap).map((r) => place(r));
+  const asGrid = () => gridRects(stage, count, gap).map((r) => place(r));
+
+  if (mode === 'sliced') {
+    const slices = slicedRects(stage, count, gap);
+    // A stage too small for a video and a chat (mid-collapse, say).
+    if (slices.length === 0) return asGrid();
+    return slices.map(({ video, chat }) => ({ ...place(video), chat }));
   }
+
+  // An unknown mode (a preset from a newer build) reads as Grid, as Rust reads it.
+  if ((mode !== 'main_row' && mode !== 'main_column') || count === 1) return asGrid();
 
   const s = Math.min(0.4, Math.max(0.15, Number.isFinite(share) ? share : 0.25));
   const small = count - 1;
-
-  const asGrid = () => gridRects(stage, count, gap).map((r) => place(r));
 
   if (mode === 'main_row') {
     const stripH = Math.round(height * s);

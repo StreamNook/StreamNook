@@ -1457,7 +1457,7 @@ export interface MultiNookTileMeta {
 }
 
 /** How MultiNook arranges its tiles (Rust: models/settings.rs MultiNookLayoutMode). */
-export type MultiNookLayoutMode = 'grid' | 'main_row' | 'main_column';
+export type MultiNookLayoutMode = 'grid' | 'main_row' | 'main_column' | 'sliced';
 
 /** The MultiNook layout (Rust: MultiNookLayout). */
 export interface MultiNookLayout {

@@ -41,7 +41,7 @@ export function currentNookLayout(): MultiNookLayout {
  */
 function wantedCap(slot: MultiNookSlot, slots: MultiNookSlot[], maximizedSlotId: string | null): number | null {
   const layout = currentNookLayout();
-  if (layout.mode === 'grid' || !layout.small_quality_cap) return null;
+  if (layout.mode === 'grid' || layout.mode === 'sliced' || !layout.small_quality_cap) return null;
   if (slot.id === maximizedSlotId) return null;
   const main = slots.find((s) => !s.isMinimized);
   if (main && main.id === slot.id) return null;
