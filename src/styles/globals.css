@@ -8967,6 +8967,38 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   z-index: 3;
 }
 
+/* Vertical screens (Settings > Chat > Chat Placement; App.tsx sets
+   data-sn-vertical while the window is taller than it is wide). The stream
+   view is [player][chat] in DOM order: the player takes a 16:9 band of the
+   view's own width (cqw, so a sidebar beside it is not counted and the video
+   has no bars) and chat takes everything below. A MultiNook grid ('nook')
+   keeps its 44px toolbar (MultiNookToolbar, h-11) above the tiles, so its
+   band is that much taller. Size containment only: the player's fixed full
+   screen still covers the window. Framer writes an inline height onto the
+   chat panel for its open/close spring, so these have to win. With no chat
+   on screen the player is also the last child, and the last rule lets it
+   fill the view. */
+[data-sn-stream-container][data-sn-vertical] {
+  container-type: inline-size;
+}
+
+[data-sn-stream-container][data-sn-vertical] > :first-child {
+  flex: 0 0 auto !important;
+  width: 100% !important;
+  height: 56.25cqw !important;
+}
+
+[data-sn-stream-container][data-sn-vertical='nook'] > :first-child {
+  height: calc(56.25cqw + 44px) !important;
+}
+
+[data-sn-stream-container][data-sn-vertical] > :last-child {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+}
+
 /* Full-screen chat column (App.tsx). Brought up over the player's CSS full
    screen with the chat button or C, the docked chat panel is lifted above
    the fixed .plyr as a translucent column: same node, no remount, no second

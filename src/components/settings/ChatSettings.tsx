@@ -880,6 +880,66 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             </SubControls>
           )}
         </SettingsRow>
+        <SettingsRow
+          title="Vertical screens"
+          onReset={resetFor(['vertical_screens.enabled', false])}
+          description="When the window is taller than it is wide, only the video and chat stay on screen: the video fills the width and chat fills the space underneath, whatever Position says."
+          help="Made for a monitor turned on its side: maximize StreamNook there and the stream sits on top with chat below, while the title bar and sidebar tuck away and slide back in when you move to the top or left edge. It follows the window's shape, so a tall window on a wide screen gets it too, and going back to a wide window puts everything back. Hidden chat stays hidden, and Compact View keeps its own layout. While the window is tall, the aspect-ratio lock stands down, since chat takes whatever the video leaves."
+          control={
+            <Toggle
+              enabled={settings.vertical_screens?.enabled ?? false}
+              onChange={() =>
+                updateSettings({
+                  ...settings,
+                  vertical_screens: { ...settings.vertical_screens, enabled: !(settings.vertical_screens?.enabled ?? false) },
+                })
+              }
+            />
+          }
+        >
+          {(settings.vertical_screens?.enabled ?? false) && (
+            <SubControls>
+              <SubControl
+                title="Hide title bar"
+                description="Slides down when you move to the top edge."
+                onReset={resetFor(['vertical_screens.hide_title_bar', true])}
+                control={
+                  <Toggle
+                    enabled={settings.vertical_screens?.hide_title_bar ?? true}
+                    onChange={() =>
+                      updateSettings({
+                        ...settings,
+                        vertical_screens: {
+                          ...settings.vertical_screens,
+                          hide_title_bar: !(settings.vertical_screens?.hide_title_bar ?? true),
+                        },
+                      })
+                    }
+                  />
+                }
+              />
+              <SubControl
+                title="Hide sidebar"
+                description="Slides in when you move to the left edge."
+                onReset={resetFor(['vertical_screens.hide_sidebar', true])}
+                control={
+                  <Toggle
+                    enabled={settings.vertical_screens?.hide_sidebar ?? true}
+                    onChange={() =>
+                      updateSettings({
+                        ...settings,
+                        vertical_screens: {
+                          ...settings.vertical_screens,
+                          hide_sidebar: !(settings.vertical_screens?.hide_sidebar ?? true),
+                        },
+                      })
+                    }
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
       </SettingsSection>
 
       {/* The player's own full screen opens as video only; the chat button in
