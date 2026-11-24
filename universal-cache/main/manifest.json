@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1795452652,
+  "last_sync": 1795538549,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -5552,7 +5552,7 @@
                   "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/95507c79-f87e-4a0d-9940-92af830b3b36/2",
                   "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/95507c79-f87e-4a0d-9940-92af830b3b36/3",
                   "title": "RuneScape Bones",
-                  "description": "Watch 60 minutes of any channel streaming in the Old School RuneScape category.",
+                  "description": "This badge was earned by watching 60 minutes of any channel streaming in the Old School RuneScape category.",
                   "click_action": null,
                   "click_url": null
                 }
@@ -5597,7 +5597,7 @@
                   "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/8b5bf6d2-3f89-4c24-a6c2-c5eda04ce1e6/2",
                   "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/8b5bf6d2-3f89-4c24-a6c2-c5eda04ce1e6/3",
                   "title": "RuneScape Gnome Plush",
-                  "description": "Subscribe or Gift 1 sub to any channel streaming in the Old School RuneScape category.",
+                  "description": "This badge was earned by subscribing or gifting a sub to any channel streaming in the Old School RuneScape category.",
                   "click_action": null,
                   "click_url": null
                 }
@@ -5612,7 +5612,7 @@
                   "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/bf75cdff-7b3a-4ba6-a1d5-e00563b9877e/2",
                   "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/bf75cdff-7b3a-4ba6-a1d5-e00563b9877e/3",
                   "title": "RuneScape Quest Icon",
-                  "description": "Watch 60 minutes of any channel streaming in the RuneScape category.",
+                  "description": "This badge was earned by watching 60 minutes of any channel streaming in the RuneScape category.",
                   "click_action": null,
                   "click_url": null
                 }
@@ -5627,7 +5627,7 @@
                   "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/2bee9264-647c-4bdc-921f-cb5e651b1c64/2",
                   "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/2bee9264-647c-4bdc-921f-cb5e651b1c64/3",
                   "title": "RuneScape Santa Hat",
-                  "description": "Watch 60 minutes of any channel streaming in the Old School RuneScape category during December 2026.",
+                  "description": "This badge was earned by watching 60 minutes of any channel streaming in the Old School RuneScape category during December 2026.",
                   "click_action": null,
                   "click_url": null
                 }
@@ -8080,10 +8080,10 @@
             }
           ]
         },
-        "cached_at": 1795452647
+        "cached_at": 1795538537
       },
       "metadata": {
-        "timestamp": 1795452647,
+        "timestamp": 1795538537,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -16370,7 +16370,7 @@
         "more_info": "DayZ Yellow King is a limited-time global chat badge dedicated to the launch of DayZ Badlands expansion. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the DayZ category. Event duration: 2026-10-08T11:00:00Z – 2026-10-19T08:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1794928202,
+        "timestamp": 1795538540,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16642,7 +16642,7 @@
         "more_info": "Modern Warfare 4 is a limited-time global chat badge dedicated to the launch of the Call of Duty Modern Warfare 4. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Call of Duty Modern Warfare 4 category. Event duration: 2026-10-23T17:00:00Z – 2026-11-13T17:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1794928243,
+        "timestamp": 1795538547,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16898,7 +16898,7 @@
         "more_info": "Hunt Red is a limited-time global chat badge dedicated to the Hunt: Showdown 1896. To earn it, you needed to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Hunt: Showdown 1896 category. Event duration: 2026-10-26T14:54:00Z – 2026-11-09T13:59:00Z The badge is distributed via Twitch Drops and granted automatically after the requirement is met. There’s also a free badge from this campaign: Hunt White"
       },
       "metadata": {
-        "timestamp": 1794928218,
+        "timestamp": 1795538544,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16914,7 +16914,7 @@
         "more_info": "Hunt White is a limited-time global chat badge dedicated to the Hunt: Showdown 1896. To earn it, you need to watch 15 minutes of any livestream in the Hunt: Showdown 1896 category. Event duration: 2026-10-26T14:54:00Z – 2026-11-09T13:59:00Z The badge is distributed via Twitch Drops and granted automatically after the requirement is met. There’s also a paid badge from this campaign: HuntRed"
       },
       "metadata": {
-        "timestamp": 1794928228,
+        "timestamp": 1795538546,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16978,7 +16978,7 @@
         "more_info": "Horde is a limited-time global chat badge dedicated to the launch of WoW: Forever. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the World of Warcraft category. Event duration: 2026-11-04T16:00:00Z – 2026-12-01T07:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also an Alliance badge."
       },
       "metadata": {
-        "timestamp": 1794928211,
+        "timestamp": 1795538543,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -17234,7 +17234,7 @@
         "more_info": "Scored Big is a limited-time global chat badge dedicated to the launch of the GTAVI. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Grand Theft Auto VI category. Event duration: 2026-11-18T11:00:00Z – 2026-12-01T07:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. Other badges from this campaign: Purple Chain (free, watch day 1) Bronze Chain (free, watch day 2) Silver Chain (free, watch day 3) Gold Chain (free, watch day 4) Diamond Chain (free, watch day 5) Miami Chain (free, watch day 6) Bleed Miami (sub) Welcome 2 Miami (sub) Golden Iguana (for earning all of the badges listed above)"
       },
       "metadata": {
-        "timestamp": 1795452652,
+        "timestamp": 1795538549,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
