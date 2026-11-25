@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1795538549,
+  "last_sync": 1795624068,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -8080,10 +8080,10 @@
             }
           ]
         },
-        "cached_at": 1795538537
+        "cached_at": 1795624031
       },
       "metadata": {
-        "timestamp": 1795538537,
+        "timestamp": 1795624031,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -16386,7 +16386,7 @@
         "more_info": "Vaultbreakers is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to watch 60 minutes of any livestream in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-10-15T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a paid badge from this campaign: Vaultbreakers Golden"
       },
       "metadata": {
-        "timestamp": 1795013279,
+        "timestamp": 1795624061,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16402,7 +16402,7 @@
         "more_info": "Vaultbreakers Golden is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-10-15T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a free badge from this campaign: Vaultbreakers"
       },
       "metadata": {
-        "timestamp": 1795013280,
+        "timestamp": 1795624068,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16962,7 +16962,7 @@
         "more_info": "Alliance is a limited-time global chat badge dedicated to the launch of WoW: Forever. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the World of Warcraft category. Event duration: 2026-11-04T16:00:00Z – 2026-12-01T07:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also an Horde badge."
       },
       "metadata": {
-        "timestamp": 1795013267,
+        "timestamp": 1795624033,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -17087,10 +17087,10 @@
       "data": {
         "date_added": "10 November 2026",
         "usage_stats": null,
-        "more_info": "Jordan x Space Jam is a limited-time global chat badge dedicated to the Jordan x Space Jam streams during TwitchCon San Diego 2026. To earn it, you need to watch the selected channel for 15 minutes during the following periods: 2026-11-13T20:25:00Z – 2026-11-13T21:59:00Z on Samham channel 2026-11-13T23:10:00Z – 2026-11-14T07:59:00Z on Samham channel 2026-11-14T18:15:00Z – 2026-11-14T19:29:00Z on Samham , RealKatieB , or itspikaaa channel The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
+        "more_info": "Jordan x Space Jam is a limited-time global chat badge dedicated to the Jordan x Space Jam streams during TwitchCon San Diego 2026. To earn it, you need to watch the selected channel for 15 minutes during the following periods: 2026-11-13T20:25:00Z – 2026-11-13T21:59:00Z on Samham channel 2026-11-13T23:10:00Z – 2026-11-14T07:59:00Z on Samham channel 2026-11-14T18:15:00Z – 2026-11-14T19:29:00Z on Samham , RealKatieB , or itspikaaa channel 2026-11-19T19:40:00Z – 2026-11-20T19:59:00Z on Samham channel The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1795013268,
+        "timestamp": 1795624036,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -17234,7 +17234,7 @@
         "more_info": "Scored Big is a limited-time global chat badge dedicated to the launch of the GTAVI. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Grand Theft Auto VI category. Event duration: 2026-11-18T11:00:00Z – 2026-12-01T07:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. Other badges from this campaign: Purple Chain (free, watch day 1) Bronze Chain (free, watch day 2) Silver Chain (free, watch day 3) Gold Chain (free, watch day 4) Diamond Chain (free, watch day 5) Miami Chain (free, watch day 6) Bleed Miami (sub) Welcome 2 Miami (sub) Golden Iguana (for earning all of the badges listed above)"
       },
       "metadata": {
-        "timestamp": 1795538549,
+        "timestamp": 1795624054,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -17282,7 +17282,7 @@
         "more_info": "RuneScape Bones is a limited-time global chat badge dedicated to the Old School RuneScape. To earn it, you need to watch 60 minutes of any livestream in the Old School RuneScape category during the campaign. Event duration: 2026-11-18T13:06:00Z – 2026-11-30T23:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. Another badge from this campaign: RuneScape Gnome Plush"
       },
       "metadata": {
-        "timestamp": 1795013269,
+        "timestamp": 1795624038,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -17298,7 +17298,7 @@
         "more_info": "RuneScape Gnome Plush is a limited-time global chat badge dedicated to the Old School RuneScape. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Old School RuneScape category. Event duration: 2026-11-18T13:06:00Z – 2026-11-30T23:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. Another badge from this campaign: RuneScape Bones"
       },
       "metadata": {
-        "timestamp": 1795013271,
+        "timestamp": 1795624040,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -17314,7 +17314,7 @@
         "more_info": "RuneScape Quest Icon is a limited-time global chat badge dedicated to the Old School RuneScape. To earn it, you need to watch 60 minutes of any livestream in the Old School RuneScape category during the campaign. Event duration: to be confirmed The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1795013272,
+        "timestamp": 1795624043,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -17346,7 +17346,7 @@
         "more_info": "RuneScape Santa Hat is a limited-time global chat badge dedicated to the Old School RuneScape. To earn it, you need to watch 60 minutes of any livestream in the Old School RuneScape category during the campaign. Event duration: to be confirmed The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1795013276,
+        "timestamp": 1795624047,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
